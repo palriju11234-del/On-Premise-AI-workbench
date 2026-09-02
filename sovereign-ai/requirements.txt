@@ -8,3 +8,9 @@ Pillow
 python-docx
 pandas
 numpy
+
+# Backend (Phase 1)
+fastapi
+uvicorn[standard]
+pydantic-settings
+httpx

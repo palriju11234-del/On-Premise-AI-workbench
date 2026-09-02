@@ -1,0 +1,10 @@
+{
+    "users": {
+        "admin": {
+            "username": "admin",
+            "hashed_password": "<bcrypt hash — auto-generated on first startup>",
+            "role": "ADMIN",
+            "is_active": true
+        }
+    }
+}
