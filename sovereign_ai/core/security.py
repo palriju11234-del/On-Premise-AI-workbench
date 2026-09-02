@@ -1,7 +1,10 @@
+from fastapi import Header, HTTPException, status
+from sovereign_ai.schemas.security import UserRole, UserContext
+
+
 class SecurityEngine:
 
     def classify(self, filename: str, text: str):
-
         sensitive_keywords = [
             "confidential",
             "internal",
@@ -14,7 +17,6 @@ class SecurityEngine:
         ]
 
         score = 0
-
         text_lower = text.lower()
 
         for keyword in sensitive_keywords:
@@ -35,25 +37,47 @@ class SecurityEngine:
         }
 
     def get_policy(self, classification):
-
         policies = {
             "GENERAL": {
                 "allow_local_processing": True,
                 "external_api": False,
                 "human_review": False
             },
-
             "INTERNAL": {
                 "allow_local_processing": True,
                 "external_api": False,
                 "human_review": False
             },
-
             "CONFIDENTIAL": {
                 "allow_local_processing": True,
                 "external_api": False,
                 "human_review": True
             }
         }
-
         return policies[classification]
+
+
+# Pre-configured enterprise mock identities
+MOCK_USERS = {
+    "admin-token": UserContext(user_id="usr_01", username="admin_alice", role=UserRole.ADMIN),
+    "engineer-token": UserContext(user_id="usr_02", username="eng_bob", role=UserRole.ENGINEER),
+    "reviewer-token": UserContext(user_id="usr_03", username="rev_charlie", role=UserRole.REVIEWER),
+    "operator-token": UserContext(user_id="usr_04", username="op_dave", role=UserRole.OPERATOR),
+}
+
+
+def get_current_user(authorization: str = Header(None)) -> UserContext:
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing Authorization header"
+        )
+
+    token = authorization.replace("Bearer ", "").strip()
+    user = MOCK_USERS.get(token)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired credentials"
+        )
+    return user
