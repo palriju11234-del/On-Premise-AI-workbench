@@ -220,6 +220,8 @@ __marimo__/
 # Project archives
 *.zip
 
-# Local user store
+# Local user store & uploaded artifacts
 backend/data/users.json
 sovereign-ai/backend/data/users.json
+sovereign-ai/data/uploads/
+sovereign-ai/backend/data/documents.json
