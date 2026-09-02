@@ -1,0 +1,10 @@
+streamlit
+ollama
+chromadb
+sentence-transformers
+pymupdf
+pytesseract
+Pillow
+python-docx
+pandas
+numpy
