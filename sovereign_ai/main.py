@@ -7,6 +7,7 @@ from sovereign_ai.api.security_router import router as security_router
 from sovereign_ai.api.document_router import router as document_router
 from sovereign_ai.api.rag_router import router as rag_router
 from sovereign_ai.api.model_router_api import router as model_router_api
+from sovereign_ai.api.agent_router import router as agent_router
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 
 @app.exception_handler(SovereignException)
@@ -22,6 +23,7 @@ app.include_router(security_router)
 app.include_router(document_router)
 app.include_router(rag_router)
 app.include_router(model_router_api)
+app.include_router(agent_router)
 @app.get("/")
 def root():
     return {"message": f"{APP_NAME} Backend is operational."}
