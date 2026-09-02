@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   ArrowRight, Plus, FileText, Search, Edit3,
   Calculator, CheckCircle2, ShieldCheck, Loader2, AlertCircle,
@@ -32,7 +32,35 @@ export default function App() {
   );
   const [projectTitle, setProjectTitle] = useState('Refinery Unit 4');
   const [classification, setClassification] = useState('INTERNAL');
+  const fileInputRef = useRef(null);
+  const [isUploading, setIsUploading] = useState(false);
 
+  const handleDocumentSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+      const response = await workbenchApi.uploadDocument(role, file);
+      console.log('Upload response:', response.data);
+      setAttachedFileName(file.name);
+      if (response.data?.text || response.data?.text_preview) {
+        setDocContext(response.data.text || response.data.text_preview);
+      }
+      alert('Document uploaded and processed successfully!');
+    } catch (error) {
+      alert('Upload failed. Please check API connection.');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const triggerFileUpload = () => {
+    fileInputRef.current?.click();
+  };
   // Approval Flow State (WEB 13)
   const [approvalDecision, setApprovalDecision] = useState(null);
 
@@ -267,8 +295,8 @@ export default function App() {
                       type="button"
                       onClick={() => setRole(r)}
                       className={`py-2 px-3 text-xs font-bold rounded-xl border transition-all ${role === r
-                          ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
-                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                        ? 'bg-emerald-700 text-white border-emerald-700 shadow-sm'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                         }`}
                     >
                       {r}
@@ -342,7 +370,9 @@ export default function App() {
               />
 
               <div className="pt-2 border-t border-slate-100 flex items-center gap-3 text-xs text-emerald-800 font-medium flex-wrap">
-                <button onClick={() => setScreen('files')} className="hover:underline">Attach files</button>
+                <button type="button" onClick={triggerFileUpload} className="hover:underline">
+                  {isUploading ? 'Uploading...' : 'Attach files'}
+                </button>
                 <span className="text-slate-300">•</span>
                 <button onClick={() => setScreen('knowledge')} className="hover:underline">Add context</button>
                 <span className="text-slate-300">•</span>
@@ -430,11 +460,20 @@ export default function App() {
             <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase block">INPUTS</span>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div
-                onClick={() => setScreen('files')}
+                onClick={triggerFileUpload}
                 className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80 cursor-pointer hover:border-emerald-300 transition"
               >
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleDocumentSelect}
+                  accept=".pdf,.txt,.docx,.csv"
+                  className="hidden"
+                />
                 <p className="text-sm font-bold text-slate-800">+ Attach files</p>
-                <p className="text-xs text-emerald-700 mt-1">{attachedFileName || 'PDF, image, spreadsheet, document'}</p>
+                <p className="text-xs text-emerald-700 mt-1">
+                  {isUploading ? 'Extracting text...' : (attachedFileName || 'PDF, image, spreadsheet, document')}
+                </p>
               </div>
 
               <div
@@ -931,8 +970,8 @@ export default function App() {
                 key={pill}
                 onClick={() => setFileFilter(pill)}
                 className={`py-2 px-5 text-xs font-bold rounded-2xl transition ${fileFilter === pill
-                    ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 text-white shadow-sm'
-                    : 'bg-emerald-600/20 text-emerald-900 hover:bg-emerald-600/30'
+                  ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 text-white shadow-sm'
+                  : 'bg-emerald-600/20 text-emerald-900 hover:bg-emerald-600/30'
                   }`}
               >
                 {pill}
@@ -1451,8 +1490,8 @@ export default function App() {
                 key={pill}
                 onClick={() => setOperationFilter(pill)}
                 className={`py-2 px-6 text-xs font-bold rounded-2xl transition ${operationFilter === pill
-                    ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 text-white shadow-sm'
-                    : 'bg-emerald-600/20 text-emerald-900 hover:bg-emerald-600/30'
+                  ? 'bg-gradient-to-r from-emerald-700 to-emerald-600 text-white shadow-sm'
+                  : 'bg-emerald-600/20 text-emerald-900 hover:bg-emerald-600/30'
                   }`}
               >
                 {pill}

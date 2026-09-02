@@ -1,28 +1,41 @@
-from fastapi import APIRouter, Depends, HTTPException, status
-from sovereign_ai.core.security import get_current_user
-from sovereign_ai.schemas.security import UserContext
-from sovereign_ai.schemas.document import DocumentParseRequest, DocumentParseResponse
-from sovereign_ai.services.document_service import DocumentService
+import io
+import hashlib
+from fastapi import APIRouter, UploadFile, File, Header, HTTPException
+from pypdf import PdfReader
 
-router = APIRouter(prefix="/api/v1/documents", tags=["Document Intelligence"])
+router = APIRouter(prefix="/api/v1/documents", tags=["documents"])
 
-
-@router.post("/parse", response_model=DocumentParseResponse)
-def parse_document(
-    payload: DocumentParseRequest,
-    user: UserContext = Depends(get_current_user)
+@router.post("/process")
+async def process_document(
+    file: UploadFile = File(...),
+    x_role_clearance: str = Header("ENGINEER")
 ):
-    """
-    Parses document text, creates hash for provenance,
-    and runs security classification.
-    """
-    if not payload.content:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Document content cannot be empty"
-        )
+    try:
+        contents = await file.read()
+        file_sha = hashlib.sha256(contents).hexdigest()
+        extracted_text = ""
 
-    return DocumentService.process_text_document(
-        filename=payload.filename,
-        raw_text=payload.content
-    )
+        # Check file extension and extract text
+        if file.filename.lower().endswith(".pdf"):
+            reader = PdfReader(io.BytesIO(contents))
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    extracted_text += text + "\n"
+        else:
+            # Fallback for plain text, csv, logs
+            extracted_text = contents.decode("utf-8", errors="ignore")
+
+        if not extracted_text.strip():
+            extracted_text = "No readable text could be extracted from this document."
+
+        return {
+            "filename": file.filename,
+            "bytes": len(contents),
+            "sha256": file_sha,
+            "text": extracted_text.strip(),
+            "text_preview": extracted_text[:400].strip(),
+            "status": "PROCESSED"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")

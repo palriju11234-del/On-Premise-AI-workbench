@@ -1,4 +1,5 @@
 ﻿from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sovereign_ai.core.config import APP_NAME, APP_VERSION
 from sovereign_ai.core.logger import logger, SovereignException
@@ -9,7 +10,13 @@ from sovereign_ai.api.rag_router import router as rag_router
 from sovereign_ai.api.model_router_api import router as model_router_api
 from sovereign_ai.api.agent_router import router as agent_router
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 @app.exception_handler(SovereignException)
 async def sovereign_exception_handler(request: Request, exc: SovereignException):
     logger.error(f"Handled SovereignException: {exc.message}")
