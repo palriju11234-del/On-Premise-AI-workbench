@@ -5,6 +5,7 @@ from sovereign_ai.core.logger import logger, SovereignException
 from sovereign_ai.api.health_router import router as health_router
 from sovereign_ai.api.security_router import router as security_router
 from sovereign_ai.api.document_router import router as document_router
+from sovereign_ai.api.rag_router import router as rag_router
 
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
 
@@ -19,6 +20,7 @@ async def sovereign_exception_handler(request: Request, exc: SovereignException)
 app.include_router(health_router)
 app.include_router(security_router)
 app.include_router(document_router)
+app.include_router(rag_router)
 
 @app.get("/")
 def root():
