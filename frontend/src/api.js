@@ -52,6 +52,11 @@ export const workbenchApi = {
     queryRAG: (role, query, topK = 3) =>
         createClient(role).post('/rag/query', { query, top_k: topK }),
 
+    getRAGStats: (role) =>
+        createClient(role).get('/rag/maintenance/stats'),
+
+    getModelStatus: (role) => createClient(role).get('/models/status'),
+
     routeModel: (role, taskType, prompt, classification = 'GENERAL') =>
         createClient(role).post('/models/route', {
             task_type: taskType,
@@ -71,5 +76,17 @@ export const workbenchApi = {
             task,
             document_text: documentText,
             filename,
+        }),
+
+    approveAgentTask: (role, taskId, comment = null) =>
+        createClient(role).post(`/agent/${taskId}/approve`, comment ? { comment } : {}),
+
+    rejectAgentTask: (role, taskId, comment = null) =>
+        createClient(role).post(`/agent/${taskId}/reject`, comment ? { comment } : {}),
+
+    editAgentTask: (role, taskId, editInstructions, feedback = null) =>
+        createClient(role).post(`/agent/${taskId}/edit`, {
+            edit_instructions: editInstructions,
+            feedback: feedback || undefined,
         }),
 };

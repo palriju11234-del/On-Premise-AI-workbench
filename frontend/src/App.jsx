@@ -1,9 +1,9 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   ArrowRight, Plus, FileText, Search, Edit3,
   Calculator, CheckCircle2, ShieldCheck, Loader2, AlertCircle,
   Check, Circle, ArrowLeft, Shield, CheckCheck, FileDown, ExternalLink,
-  Code, Cpu, Terminal, Sliders, Play, Layers, Eye
+  Code, Cpu, Terminal, Sliders, Play, Layers, Eye, RefreshCw
 } from 'lucide-react';
 import { workbenchApi } from './api';
 
@@ -34,19 +34,23 @@ export default function App() {
   const [classification, setClassification] = useState('INTERNAL');
   const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [documentProcessed, setDocumentProcessed] = useState({
+    filename: 'inspection_report.pdf',
+    bytes: 112,
+    sha256: '5b75888c5d9869c69af0de27ac407ff701fce92c482e46b16a1f1b626aca0fe3',
+    status: 'PROCESSED',
+    text_preview: 'Equipment: Compressor C-204. Finding: Surface corrosion on flange assembly. Severity: Medium. Vibration nominal.',
+  });
 
   const handleDocumentSelect = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploading(true);
-    const formData = new FormData();
-    formData.append('file', file);
-
     try {
       const response = await workbenchApi.uploadDocument(role, file);
-      console.log('Upload response:', response.data);
-      setAttachedFileName(file.name);
+      const fname = response.data?.filename || file.name;
+      setAttachedFileName(fname);
       const parsedText =
         response.data?.extracted_text ||
         response.data?.text ||
@@ -57,9 +61,19 @@ export default function App() {
       if (parsedText) {
         setDocContext(parsedText);
       }
-      alert('Document uploaded and processed successfully!');
+      setDocumentProcessed({
+        filename: fname,
+        bytes: response.data?.bytes || file.size,
+        sha256: response.data?.sha256 || null,
+        status: response.data?.status || 'PROCESSED',
+        text_preview: response.data?.text_preview || (parsedText ? parsedText.substring(0, 300) : ''),
+      });
     } catch (error) {
-      alert('Upload failed. Please check API connection.');
+      console.error('Upload failed:', error);
+      setDocumentProcessed((prev) => ({
+        ...prev,
+        status: 'FAILED',
+      }));
     } finally {
       setIsUploading(false);
     }
@@ -70,32 +84,27 @@ export default function App() {
   };
   // Approval Flow State (WEB 13)
   const [approvalDecision, setApprovalDecision] = useState(null);
+  const [approvalLoading, setApprovalLoading] = useState(false);
+  const [approvalError, setApprovalError] = useState(null);
+  const [approvalComment, setApprovalComment] = useState('');
+  const [approvalSuccessMessage, setApprovalSuccessMessage] = useState(null);
+  const [selectedDeliverable, setSelectedDeliverable] = useState(null);
+  const [showCryptoDetails, setShowCryptoDetails] = useState(false);
 
   // RAG Search State (WEB 10)
   const [knowledgeSearchQuery, setKnowledgeSearchQuery] = useState('');
-  const [knowledgeResults, setKnowledgeResults] = useState([
-    { title: 'Maintenance SOP — Section 4.2', tag: 'Relevant' },
-    { title: 'Inspection Manual — Page 18', tag: 'Relevant' },
-    { title: 'Previous approved report — Unit 3', tag: 'Related' },
-  ]);
+  const [knowledgeResults, setKnowledgeResults] = useState(null);
+  const [knowledgeLoading, setKnowledgeLoading] = useState(false);
+  const [knowledgeError, setKnowledgeError] = useState(null);
+  const [ragStats, setRagStats] = useState(null);
+  const [ragStatsLoading, setRagStatsLoading] = useState(false);
+  const [ragStatsError, setRagStatsError] = useState(null);
 
   // Files Filter State (WEB 11)
   const [fileFilter, setFileFilter] = useState('All');
-  const filesList = [
-    { name: 'inspection_report.pdf', type: 'PDF', security: 'Sensitive', category: 'Recent' },
-    { name: 'Maintenance_SOP_v4.pdf', type: 'PDF', security: 'Sensitive', category: 'Projects' },
-    { name: 'engineering_drawing.png', type: 'IMAGE', security: 'Critical', category: 'Critical' },
-    { name: 'calculation.xlsx', type: 'XLSX', security: 'Normal', category: 'Recent' },
-  ];
 
   // Operations Filter State (WEB 21)
   const [operationFilter, setOperationFilter] = useState('Processing');
-  const operationsList = [
-    { title: 'Inspection Report → Approval Note', status: 'Running', color: 'text-emerald-700 font-semibold', category: 'Processing' },
-    { title: 'Vendor comparison', status: 'Needs review', color: 'text-emerald-800/80 font-medium', category: 'Pending' },
-    { title: 'Pressure-drop calculation', status: 'Completed', color: 'text-emerald-700 font-semibold', category: 'Completed' },
-    { title: 'Internal tool verification', status: 'Blocked', color: 'text-emerald-900/80 font-medium', category: 'Blocked' },
-  ];
 
   // Code Workspace Sandbox Lines (WEB 18)
   const [codePrompt, setCodePrompt] = useState('Write a pressure-drop calculator.');
@@ -112,44 +121,73 @@ export default function App() {
     '    # parameters'
   ];
 
-  // Capabilities Registry (WEB 19)
-  const capabilitiesList = [
-    { title: 'Search', status: 'Available' },
-    { title: 'OCR', status: 'Available' },
-    { title: 'Vision', status: 'Available' },
-    { title: 'Calculation', status: 'Available' },
-    { title: 'Code execution', status: 'Available' },
-    { title: 'Spreadsheet processing', status: 'Available' },
-    { title: 'Office generation', status: 'Available' },
-    { title: 'Internal APIs', status: 'Available' },
-  ];
+  // Model Registry & Fabric State (Live from /api/v1/models/status)
+  const [modelRegistryData, setModelRegistryData] = useState(null);
+  const [modelRegistryLoading, setModelRegistryLoading] = useState(false);
+  const [modelRegistryError, setModelRegistryError] = useState(null);
 
-  // Model Registry (WEB 20)
-  const [modelsList, setModelsList] = useState([
-    { name: 'Local Reasoning Model', category: 'Reasoning', status: 'Available' },
-    { name: 'Local Coding Model', category: 'Coding', status: 'Available' },
-    { name: 'Local Multimodal Model', category: 'Vision + Reasoning', status: 'Available' },
-    { name: 'Embedding Model', category: 'Retrieval', status: 'Available' },
-  ]);
+  const fetchModelStatus = async () => {
+    setModelRegistryLoading(true);
+    setModelRegistryError(null);
+    try {
+      const res = await workbenchApi.getModelStatus(role);
+      setModelRegistryData(res.data);
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Failed to query model registry';
+      setModelRegistryError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setModelRegistryLoading(false);
+    }
+  };
+
+  const fetchRAGStats = async () => {
+    setRagStatsLoading(true);
+    setRagStatsError(null);
+    try {
+      const res = await workbenchApi.getRAGStats(role);
+      setRagStats(res.data);
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Failed to query vector store statistics';
+      setRagStatsError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setRagStatsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchModelStatus();
+    fetchRAGStats();
+  }, [role]);
 
   // Execution & Agent Pipeline State
-  const [activeStepIndex, setActiveStepIndex] = useState(4);
-  const [taskStatus, setTaskStatus] = useState('PROCESSING');
+  const [activeStepIndex, setActiveStepIndex] = useState(0);
+  const [taskStatus, setTaskStatus] = useState('IDLE');
   const [agentResult, setAgentResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
 
-  // Workflow Checklist Steps (WEB 6)
-  const workflowSteps = [
-    { key: 'understand', label: 'Understand' },
-    { key: 'plan', label: 'Plan' },
-    { key: 'ocr', label: 'OCR / Vision' },
-    { key: 'knowledge', label: 'Knowledge' },
-    { key: 'analyze', label: 'Analyze' },
-    { key: 'draft', label: 'Draft' },
-    { key: 'verify', label: 'Verify' },
-    { key: 'govern', label: 'Govern' },
-    { key: 'deliver', label: 'Deliver' },
+  // Backend Agent Runtime Stages (11 stages)
+  const RUNTIME_STAGES = [
+    { key: 'UNDERSTAND', label: 'Understand' },
+    { key: 'CLASSIFY', label: 'Classify' },
+    { key: 'PLAN', label: 'Plan' },
+    { key: 'RETRIEVE', label: 'Retrieve' },
+    { key: 'REASON', label: 'Reason' },
+    { key: 'ACT', label: 'Act' },
+    { key: 'OBSERVE', label: 'Observe' },
+    { key: 'VERIFY', label: 'Verify' },
+    { key: 'RISK', label: 'Risk' },
+    { key: 'HUMAN_GATE', label: 'Human Gate' },
+    { key: 'DELIVER', label: 'Deliver' },
   ];
+  const workflowSteps = RUNTIME_STAGES;
 
   // Plan 10 Steps (WEB 5)
   const planSteps = [
@@ -165,46 +203,17 @@ export default function App() {
     'Record provenance',
   ];
 
-  // Timeline Activities (WEB 7)
-  const timelineActivities = [
-    { id: '01', title: 'Document inspected', status: 'Completed', color: 'text-emerald-700' },
-    { id: '02', title: 'Local OCR extracted scanned text', status: 'Completed', color: 'text-emerald-700' },
-    { id: '03', title: 'Maintenance SOP retrieved', status: 'Completed', color: 'text-emerald-700' },
-    { id: '04', title: 'Multimodal model selected', status: 'Selected', color: 'text-emerald-700' },
-    { id: '05', title: 'Analysis running', status: 'Running', color: 'text-emerald-600 font-semibold' },
-    { id: '06', title: 'Validation pending', status: 'Waiting', color: 'text-emerald-800/60' },
-    { id: '07', title: 'Risk assessment pending', status: 'Waiting', color: 'text-emerald-800/60' },
-  ];
 
   // Projects (WEB 12)
   const projectsData = [
-    { name: 'Refinery Unit 4 Inspection', files: 48, tasks: 12 },
-    { name: 'Maintenance Review', files: 24, tasks: 7 },
-    { name: 'Engineering Analysis', files: 31, tasks: 9 },
-    { name: 'Vendor Evaluation', files: 16, tasks: 4 },
+    { name: 'Refinery Unit 4 Inspection', status: 'Active Workspace', context: 'Refinery Unit 4' },
+    { name: 'Maintenance Review', status: 'Configured Workspace', context: 'Maintenance' },
+    { name: 'Engineering Analysis', status: 'Configured Workspace', context: 'Engineering' },
+    { name: 'Vendor Evaluation', status: 'Configured Workspace', context: 'Procurement' },
   ];
 
-  // Deliverables (WEB 14)
-  const deliverablesData = [
-    { name: 'Inspection_Approval_Note.docx', status: 'Verified' },
-    { name: 'analysis.pdf', status: 'Verified' },
-    { name: 'calculation.xlsx', status: 'Verified' },
-    { name: 'verified_code.zip', status: 'Verified' },
-  ];
 
-  // Provenance Events (WEB 15)
-  const provenanceSteps = [
-    { id: '01', name: 'INPUT' },
-    { id: '02', name: 'CLASSIFICATION' },
-    { id: '03', name: 'OCR / PROCESSING' },
-    { id: '04', name: 'KNOWLEDGE RETRIEVAL' },
-    { id: '05', name: 'MODEL' },
-    { id: '06', name: 'TOOL EXECUTION' },
-    { id: '07', name: 'VALIDATION' },
-    { id: '08', name: 'RISK DECISION' },
-    { id: '09', name: 'HUMAN APPROVAL' },
-    { id: '10', name: 'FINAL OUTPUT' },
-  ];
+
 
   // Risk Engine Tiers (WEB 17)
   const riskTiers = [
@@ -218,16 +227,17 @@ export default function App() {
   const handleTriggerAgentExecution = async () => {
     setScreen('execution');
     setTaskStatus('PROCESSING');
-    setActiveStepIndex(3);
+    setActiveStepIndex(0);
     setErrorMessage(null);
+    setAgentResult(null);
 
     const interval = setInterval(() => {
       setActiveStepIndex((prev) => {
-        if (prev < 7) return prev + 1;
+        if (prev < 10) return prev + 1;
         clearInterval(interval);
-        return 8;
+        return 10;
       });
-    }, 1200);
+    }, 1500);
 
     try {
       const response = await workbenchApi.runAgent(
@@ -237,10 +247,15 @@ export default function App() {
         attachedFileName
       );
       setAgentResult(response.data);
-      setTaskStatus('COMPLETED');
-      setActiveStepIndex(9);
+      setTaskStatus(response.data?.status ? response.data.status.toUpperCase() : 'COMPLETED');
+      setActiveStepIndex(11);
     } catch (err) {
-      setErrorMessage(err.response?.data?.error || err.message || 'Execution failed');
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Execution failed';
+      setErrorMessage(typeof msg === 'string' ? msg : JSON.stringify(msg));
       setTaskStatus('ERROR');
     } finally {
       clearInterval(interval);
@@ -248,20 +263,137 @@ export default function App() {
   };
 
   const handleExecuteRAGSearch = async (e) => {
-    if (e.key === 'Enter' && knowledgeSearchQuery.trim()) {
+    if ((e.type === 'click' || e.key === 'Enter') && knowledgeSearchQuery.trim()) {
+      setKnowledgeLoading(true);
+      setKnowledgeError(null);
       try {
-        const res = await workbenchApi.queryRAG(role, knowledgeSearchQuery, 3);
-        if (res.data?.results?.length > 0) {
-          setKnowledgeResults(
-            res.data.results.map((r, i) => ({
-              title: `${r.doc_id || 'Extracted Document'} — Section ${i + 1}`,
-              tag: 'Relevant',
-            }))
-          );
-        }
+        const res = await workbenchApi.queryRAG(role, knowledgeSearchQuery.trim(), 5);
+        setKnowledgeResults(res.data?.results || []);
       } catch (err) {
-        console.error('RAG lookup error:', err);
+        const msg =
+          err.response?.data?.detail ||
+          err.response?.data?.error ||
+          err.message ||
+          'RAG retrieval failed';
+        setKnowledgeError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+        setKnowledgeResults([]);
+      } finally {
+        setKnowledgeLoading(false);
       }
+    }
+  };
+
+  const handleApproveTask = async () => {
+    if (!agentResult?.task_id) return;
+    setApprovalLoading(true);
+    setApprovalError(null);
+    setApprovalSuccessMessage(null);
+    try {
+      const res = await workbenchApi.approveAgentTask(
+        role,
+        agentResult.task_id,
+        approvalComment || 'Approved by authorized human reviewer.'
+      );
+      setApprovalDecision('APPROVED');
+      setApprovalSuccessMessage(res.data?.message || 'Task approved and controlled deliverable generated successfully.');
+      setAgentResult((prev) => ({
+        ...prev,
+        human_gate: res.data?.human_gate || prev?.human_gate,
+        delivery: res.data?.delivery || prev?.delivery,
+        deliverable: res.data?.deliverable || prev?.deliverable,
+        audit_record: prev?.audit_record ? {
+          ...prev.audit_record,
+          human_approval: true,
+          output_docx_sha256: res.data?.deliverable?.sha256 || prev.audit_record.output_docx_sha256,
+          delivery_status: 'DELIVERED',
+          human_gate: res.data?.human_gate || prev.audit_record.human_gate,
+        } : prev?.audit_record,
+      }));
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Approval failed';
+      setApprovalError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  const handleRejectTask = async () => {
+    if (!agentResult?.task_id) return;
+    setApprovalLoading(true);
+    setApprovalError(null);
+    setApprovalSuccessMessage(null);
+    try {
+      const res = await workbenchApi.rejectAgentTask(
+        role,
+        agentResult.task_id,
+        approvalComment || 'Rejected by human reviewer.'
+      );
+      setApprovalDecision('REJECTED');
+      setApprovalSuccessMessage(res.data?.message || 'Task rejected. Controlled deliverable generation is blocked.');
+      setAgentResult((prev) => ({
+        ...prev,
+        human_gate: res.data?.human_gate || prev?.human_gate,
+        delivery: res.data?.delivery || prev?.delivery,
+        deliverable: null,
+        audit_record: prev?.audit_record ? {
+          ...prev.audit_record,
+          human_approval: false,
+          output_docx_sha256: null,
+          delivery_status: 'REJECTED',
+          human_gate: res.data?.human_gate || prev.audit_record.human_gate,
+        } : prev?.audit_record,
+      }));
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Rejection failed';
+      setApprovalError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setApprovalLoading(false);
+    }
+  };
+
+  const handleEditTask = async () => {
+    if (!agentResult?.task_id) return;
+    setApprovalLoading(true);
+    setApprovalError(null);
+    setApprovalSuccessMessage(null);
+    try {
+      const res = await workbenchApi.editAgentTask(
+        role,
+        agentResult.task_id,
+        approvalComment || 'Revisions requested for operational parameters.'
+      );
+      setApprovalDecision('EDIT_REQUIRED');
+      setApprovalSuccessMessage(res.data?.message || 'Task marked EDIT_REQUIRED. Deliverable generation is held pending revision.');
+      setAgentResult((prev) => ({
+        ...prev,
+        human_gate: res.data?.human_gate || prev?.human_gate,
+        delivery: res.data?.delivery || prev?.delivery,
+        deliverable: null,
+        audit_record: prev?.audit_record ? {
+          ...prev.audit_record,
+          human_approval: false,
+          output_docx_sha256: null,
+          delivery_status: 'EDIT_REQUIRED',
+          human_gate: res.data?.human_gate || prev.audit_record.human_gate,
+        } : prev?.audit_record,
+      }));
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Edit request failed';
+      setApprovalError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setApprovalLoading(false);
     }
   };
 
@@ -389,7 +521,7 @@ export default function App() {
                 <span className="text-slate-300">•</span>
                 <button onClick={() => setScreen('model_registry')} className="hover:underline">Models</button>
                 <span className="text-slate-300">•</span>
-                <span className="text-slate-500">Classification: {classification}</span>
+                <span className="text-slate-500">Classification: {agentResult?.security?.classification || classification}</span>
               </div>
             </div>
 
@@ -524,22 +656,38 @@ export default function App() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80">
               <span className="text-xs font-bold text-emerald-800 block">Task type</span>
-              <p className="text-sm font-medium text-slate-800 mt-1">Document analysis</p>
+              <p className="text-sm font-medium text-slate-800 mt-1">
+                {taskPrompt.toLowerCase().includes('code')
+                  ? 'Code Review & Analysis'
+                  : taskPrompt.toLowerCase().includes('inspect')
+                  ? 'Industrial Document Analysis'
+                  : 'Engineering Reasoning'}
+              </p>
             </div>
 
             <div className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80">
               <span className="text-xs font-bold text-emerald-800 block">Required inputs</span>
-              <p className="text-sm font-medium text-slate-800 mt-1">Scanned PDF</p>
+              <p className="text-sm font-medium text-slate-800 mt-1 truncate">
+                {attachedFileName ? `${attachedFileName} (${attachedFileName.split('.').pop().toUpperCase()})` : 'Text Prompt'}
+              </p>
             </div>
 
             <div className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80">
               <span className="text-xs font-bold text-emerald-800 block">Required capabilities</span>
-              <p className="text-sm font-medium text-slate-800 mt-1">OCR + knowledge + reasoning</p>
+              <p className="text-sm font-medium text-slate-800 mt-1">
+                {attachedFileName?.toLowerCase().endsWith('.png') || attachedFileName?.toLowerCase().endsWith('.jpg')
+                  ? 'Vision OCR + Knowledge + Reasoning'
+                  : 'Document Extraction + RAG + Reasoning'}
+              </p>
             </div>
 
             <div className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80">
               <span className="text-xs font-bold text-emerald-800 block">Modality</span>
-              <p className="text-sm font-medium text-slate-800 mt-1">Multimodal</p>
+              <p className="text-sm font-medium text-slate-800 mt-1">
+                {attachedFileName?.toLowerCase().endsWith('.png') || attachedFileName?.toLowerCase().endsWith('.jpg')
+                  ? 'Multimodal (Vision)'
+                  : 'Text / Structured Document'}
+              </p>
             </div>
 
             <div
@@ -547,7 +695,9 @@ export default function App() {
               className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80 sm:col-span-1 cursor-pointer hover:border-emerald-300 transition"
             >
               <span className="text-xs font-bold text-emerald-800 block">Risk classification</span>
-              <p className="text-sm font-medium text-slate-800 mt-1">Medium / review</p>
+              <p className="text-sm font-medium text-slate-800 mt-1">
+                {agentResult?.risk?.risk_level ? `${agentResult.risk.risk_level} (${agentResult.risk.factors?.length || 0} factors)` : 'Evaluated at runtime'}
+              </p>
             </div>
           </div>
 
@@ -616,7 +766,11 @@ export default function App() {
             <div>
               <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">ACTIVE TASK</span>
               <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">
-                Inspection Report → Approval Note
+                {(agentResult?.audit_record?.task || taskPrompt)
+                  ? ((agentResult?.audit_record?.task || taskPrompt).length > 60
+                      ? `${(agentResult?.audit_record?.task || taskPrompt).substring(0, 60)}...`
+                      : (agentResult?.audit_record?.task || taskPrompt))
+                  : 'Inspection Report → Approval Note'}
               </h1>
               <p className="text-slate-600 text-sm mt-1">Agent execution with auditable action summaries.</p>
             </div>
@@ -642,11 +796,32 @@ export default function App() {
             </div>
           </div>
 
+          {errorMessage && (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 text-rose-800 text-sm animate-in fade-in">
+              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold block">Execution Error</span>
+                <p className="text-xs text-rose-700 mt-0.5 font-mono">{errorMessage}</p>
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
             <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-6">
               <div>
                 <span className="text-xs font-bold text-emerald-800 block">TASK</span>
-                <p className="text-sm font-bold text-slate-900 mt-1 leading-snug">Review Unit-4 inspection report</p>
+                <p className="text-sm font-bold text-slate-900 mt-1 leading-snug">
+                  {(agentResult?.audit_record?.task || taskPrompt)
+                    ? ((agentResult?.audit_record?.task || taskPrompt).length > 90
+                        ? `${(agentResult?.audit_record?.task || taskPrompt).substring(0, 90)}...`
+                        : (agentResult?.audit_record?.task || taskPrompt))
+                    : 'No active task'}
+                </p>
+                {agentResult?.task_id && (
+                  <span className="text-[10px] font-mono text-slate-500 block mt-1">
+                    ID: {agentResult.task_id}
+                  </span>
+                )}
               </div>
 
               <div>
@@ -655,44 +830,85 @@ export default function App() {
                   onClick={() => setScreen('document')}
                   className="text-xs font-mono text-emerald-700 mt-1 underline cursor-pointer hover:text-emerald-900"
                 >
-                  {attachedFileName}
+                  {agentResult?.audit_record?.filename || attachedFileName}
                 </p>
               </div>
 
               <div>
                 <span className="text-xs font-bold text-emerald-800 block">STATUS</span>
                 <div className="mt-1.5">
-                  <span className="inline-block text-xs font-bold px-3 py-1 rounded-full border border-emerald-300 text-emerald-800 bg-emerald-50/60">
-                    {taskStatus}
+                  <span className={`inline-block text-xs font-bold px-3 py-1 rounded-full border ${
+                    taskStatus === 'ERROR'
+                      ? 'border-rose-300 text-rose-800 bg-rose-50/60'
+                      : 'border-emerald-300 text-emerald-800 bg-emerald-50/60'
+                  }`}>
+                    {agentResult?.status ? agentResult.status.toUpperCase() : taskStatus}
                   </span>
                 </div>
               </div>
             </div>
 
-            <div className="md:col-span-5 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-3.5">
-              {workflowSteps.map((s, idx) => {
-                const isDone = idx < activeStepIndex;
-                const isCurrent = idx === activeStepIndex;
+            <div className="md:col-span-5 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-2.5">
+              {(agentResult?.stages && agentResult.stages.length > 0
+                ? agentResult.stages
+                : RUNTIME_STAGES
+              ).map((stageItem, idx) => {
+                const stageKey = stageItem.stage || stageItem.key;
+                const stageLabel =
+                  stageItem.label ||
+                  stageKey.replace('_', ' ').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+                const isBackendStage = Boolean(agentResult?.stages);
+                const isDone = isBackendStage
+                  ? stageItem.status === 'COMPLETED'
+                  : idx < activeStepIndex;
+                const isCurrent = isBackendStage
+                  ? false
+                  : idx === activeStepIndex;
+                const isFailed = isBackendStage && stageItem.status === 'FAILED';
 
                 return (
-                  <div key={s.key} className="flex items-center gap-2.5 text-sm">
-                    <span className="font-semibold text-slate-800">{s.label}</span>
-                    {isDone && <Check className="w-4 h-4 text-slate-800 stroke-[2.5]" />}
-                    {isCurrent && <span className="w-2.5 h-2.5 rounded-full bg-slate-900 inline-block ml-0.5 animate-ping" />}
-                    {!isDone && !isCurrent && <Circle className="w-3.5 h-3.5 text-slate-300 stroke-[1.5]" />}
+                  <div key={stageKey} className="flex items-center justify-between text-sm py-0.5">
+                    <div className="flex items-center gap-2.5">
+                      <span className="font-semibold text-slate-800">{stageLabel}</span>
+                      {isDone && <Check className="w-4 h-4 text-slate-800 stroke-[2.5]" />}
+                      {isCurrent && (
+                        <span className="w-2.5 h-2.5 rounded-full bg-slate-900 inline-block ml-0.5 animate-ping" />
+                      )}
+                      {isFailed && (
+                        <AlertCircle className="w-4 h-4 text-rose-600 stroke-[2.5]" />
+                      )}
+                      {!isDone && !isCurrent && !isFailed && (
+                        <Circle className="w-3.5 h-3.5 text-slate-300 stroke-[1.5]" />
+                      )}
+                    </div>
+                    {isBackendStage && stageItem.status && (
+                      <span className={`text-[10px] font-mono font-medium uppercase ${
+                        stageItem.status === 'COMPLETED' ? 'text-emerald-700' : 'text-rose-600'
+                      }`}>
+                        {stageItem.status}
+                      </span>
+                    )}
                   </div>
                 );
               })}
             </div>
 
-            <div className="md:col-span-3 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-6">
+            <div className="md:col-span-3 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-5">
               <div>
                 <span className="text-xs font-bold text-emerald-800 block">TRUST</span>
                 <p
                   onClick={() => setScreen('routing')}
                   className="text-sm font-bold text-slate-900 mt-1 cursor-pointer hover:underline"
                 >
-                  Local
+                  {agentResult?.model?.model || agentResult?.model?.selected_model
+                    ? `Local (${agentResult.model.model || agentResult.model.selected_model})`
+                    : typeof agentResult?.model === 'string'
+                    ? `Local (${agentResult.model})`
+                    : agentResult?.audit_record?.model
+                    ? `Local (${agentResult.audit_record.model})`
+                    : taskStatus === 'PROCESSING'
+                    ? 'Routing model...'
+                    : 'Local (Pending run)'}
                 </p>
               </div>
 
@@ -701,9 +917,17 @@ export default function App() {
                 <div className="mt-1.5">
                   <span
                     onClick={() => setScreen('risk_engine')}
-                    className="inline-block text-[11px] font-bold px-3 py-1 rounded-full border border-slate-200 text-emerald-800 tracking-wide cursor-pointer hover:border-emerald-400"
+                    className={`inline-block text-[11px] font-bold px-3 py-1 rounded-full border tracking-wide cursor-pointer hover:border-emerald-400 ${
+                      agentResult?.risk?.risk_level === 'HIGH'
+                        ? 'border-rose-200 text-rose-700 bg-rose-50'
+                        : agentResult?.risk?.risk_level === 'MEDIUM'
+                        ? 'border-amber-200 text-amber-800 bg-amber-50'
+                        : agentResult?.risk?.risk_level === 'LOW'
+                        ? 'border-emerald-200 text-emerald-800 bg-emerald-50'
+                        : 'border-slate-200 text-emerald-800'
+                    }`}
                   >
-                    MEDIUM
+                    {agentResult?.risk?.risk_level || (taskStatus === 'PROCESSING' ? 'EVALUATING' : 'Evaluated at runtime')}
                   </span>
                 </div>
               </div>
@@ -714,7 +938,33 @@ export default function App() {
                   onClick={() => setScreen('approvals')}
                   className="text-sm font-medium text-emerald-700 underline cursor-pointer mt-1"
                 >
-                  Review required
+                  {agentResult?.human_gate?.human_gate_status
+                    ? (agentResult.human_gate.human_gate_status === 'NOT_REQUIRED'
+                        ? 'Not required'
+                        : agentResult.human_gate.human_gate_status === 'PENDING'
+                        ? 'Review required'
+                        : agentResult.human_gate.human_gate_status === 'APPROVED'
+                        ? 'Approved'
+                        : agentResult.human_gate.human_gate_status === 'REJECTED'
+                        ? 'Rejected'
+                        : agentResult.human_gate.human_gate_status.replace('_', ' '))
+                    : (taskStatus === 'PROCESSING' ? 'Evaluating...' : 'Pending execution')}
+                </p>
+              </div>
+
+              <div>
+                <span className="text-xs font-bold text-emerald-800 block">Delivery</span>
+                <p
+                  onClick={() => setScreen('deliverables')}
+                  className="text-sm font-medium text-emerald-700 underline cursor-pointer mt-1"
+                >
+                  {agentResult?.delivery?.delivery_status
+                    ? (agentResult.delivery.delivery_status === 'DELIVERED'
+                        ? 'Delivered'
+                        : agentResult.delivery.delivery_status === 'PENDING_APPROVAL'
+                        ? 'Pending approval'
+                        : agentResult.delivery.delivery_status.replace('_', ' '))
+                    : (taskStatus === 'PROCESSING' ? 'In progress' : 'No deliverable available')}
                 </p>
               </div>
 
@@ -724,7 +974,7 @@ export default function App() {
                   onClick={() => setScreen('provenance')}
                   className="text-sm font-medium text-emerald-700 underline cursor-pointer mt-1"
                 >
-                  Active
+                  {agentResult?.audit_record ? 'Recorded' : (taskStatus === 'PROCESSING' ? 'Recording...' : 'Pending execution')}
                 </p>
               </div>
             </div>
@@ -733,7 +983,18 @@ export default function App() {
           {agentResult && (
             <div className="bg-white/95 rounded-3xl p-6 shadow-lg border border-emerald-200 space-y-3 animate-in fade-in">
               <div className="flex justify-between items-center">
-                <span className="text-xs font-bold text-emerald-800 uppercase">Agent Synthesis Deliverable</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-emerald-800 uppercase">Agent Synthesis Deliverable</span>
+                  {agentResult.verification?.status && (
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      agentResult.verification.status === 'PASSED'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-300'
+                        : 'bg-amber-50 text-amber-700 border-amber-300'
+                    }`}>
+                      Verification: {agentResult.verification.status}
+                    </span>
+                  )}
+                </div>
                 <button
                   onClick={() => setScreen('deliverables')}
                   className="text-xs font-bold text-emerald-700 underline flex items-center gap-1"
@@ -744,6 +1005,17 @@ export default function App() {
               <p className="text-xs font-mono text-slate-700 bg-slate-50 p-4 rounded-xl whitespace-pre-wrap leading-relaxed">
                 {agentResult.answer}
               </p>
+              {agentResult.deliverable?.filename && (
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs text-slate-600">
+                  <span className="font-mono text-emerald-800 font-semibold flex items-center gap-1">
+                    <FileText className="w-3.5 h-3.5" />
+                    {agentResult.deliverable.filename}
+                  </span>
+                  <span className="text-[10px] font-mono text-slate-400">
+                    SHA-256: {agentResult.deliverable.sha256 ? `${agentResult.deliverable.sha256.substring(0, 16)}...` : 'Not available'}
+                  </span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -769,18 +1041,49 @@ export default function App() {
           </div>
 
           <div className="space-y-3">
-            {timelineActivities.map((act) => (
-              <div
-                key={act.id}
-                className="bg-white/95 backdrop-blur-md rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
-              >
-                <div className="flex items-center gap-4">
-                  <span className="text-xs font-mono font-bold text-emerald-800 w-6">{act.id}</span>
-                  <span className="text-sm text-slate-800 font-medium">{act.title}</span>
+            {!agentResult ? (
+              <div className="bg-white/95 rounded-2xl p-8 shadow-sm border border-emerald-100/80 text-center space-y-4">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center border border-emerald-100">
+                  <Terminal className="w-6 h-6" />
                 </div>
-                <span className={`text-xs font-semibold ${act.color}`}>{act.status}</span>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">No Active Task Activity</h3>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Execute an agent workflow from the Command Center to inspect the live auditable activity trace.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setScreen('command_center')}
+                  className="py-2.5 px-6 rounded-xl font-semibold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition"
+                >
+                  Go to Command Center
+                </button>
               </div>
-            ))}
+            ) : (
+              (agentResult.stages || []).map((st, idx) => {
+                const stepNum = String(idx + 1).padStart(2, '0');
+                const summary = st.details?.summary || st.details?.task || st.stage;
+                const isCompleted = st.status === 'COMPLETED';
+                const isFailed = st.status === 'FAILED';
+                const statusColor = isCompleted ? 'text-emerald-700 font-semibold' : isFailed ? 'text-rose-700 font-bold' : 'text-amber-700 font-semibold';
+
+                return (
+                  <div
+                    key={idx}
+                    className="bg-white/95 backdrop-blur-md rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-4">
+                      <span className="text-xs font-mono font-bold text-emerald-800 w-6">{stepNum}</span>
+                      <div>
+                        <span className="text-sm text-slate-800 font-medium block">{st.stage}</span>
+                        <span className="text-xs text-slate-500 block truncate max-w-[280px] sm:max-w-md">{summary}</span>
+                      </div>
+                    </div>
+                    <span className={`text-xs ${statusColor}`}>{st.status}</span>
+                  </div>
+                );
+              })
+            )}
           </div>
         </div>
       )}
@@ -788,51 +1091,108 @@ export default function App() {
       {/* ------------------------------------------------------------- */}
       {/* 8. WEB 8 — AUTOMATIC MODEL ROUTING                            */}
       {/* ------------------------------------------------------------- */}
-      {screen === 'routing' && (
-        <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">MODEL FABRIC</span>
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Automatic model routing</h1>
-              <p className="text-slate-600 text-sm mt-1">The system selects an appropriate local model for the task.</p>
-            </div>
-            <button
-              onClick={() => setScreen('execution')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          </div>
+      {screen === 'routing' && (() => {
+        const routedModel = agentResult?.model?.model || agentResult?.model?.selected_model || (typeof agentResult?.model === 'string' ? agentResult.model : null) || agentResult?.audit_record?.model;
+        const routedTier = agentResult?.model?.tier || agentResult?.model?.role;
+        const routedTemp = agentResult?.model?.temperature;
+        const externalApiAllowed = agentResult?.model?.external_api_allowed;
+        const classificationTier = agentResult?.security?.classification || classification;
+        const models = modelRegistryData?.models || [];
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-4">
-              {['Multimodal', 'Long context', 'Reasoning', 'Local execution'].map((feature, i) => (
-                <div key={i} className="flex items-center gap-2.5 text-sm text-slate-800 font-medium">
-                  <Check className="w-4 h-4 text-slate-700 stroke-[2.5]" />
-                  <span>{feature}</span>
-                </div>
-              ))}
-            </div>
-
-            <div className="bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 flex flex-col justify-between">
+        return (
+          <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
+            <div className="flex items-center justify-between">
               <div>
-                <span className="text-[11px] font-bold text-emerald-800 tracking-wider uppercase block">
-                  LOCAL MULTIMODAL REASONING
-                </span>
-                <h3 className="text-lg font-bold text-slate-900 mt-2">Selected automatically</h3>
-                <p className="text-xs text-emerald-700 mt-1">Based on modality, complexity and resources.</p>
+                <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">MODEL FABRIC</span>
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Automatic model routing</h1>
+                <p className="text-slate-600 text-sm mt-1">Dynamic on-premise model selection based on task and classification.</p>
               </div>
-
               <button
-                onClick={() => setScreen('model_registry')}
-                className="mt-6 w-full py-3 px-5 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition"
+                onClick={() => setScreen('execution')}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
               >
-                View model registry
+                <ArrowLeft className="w-5 h-5" />
               </button>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-3">
+                <span className="text-[11px] font-bold text-emerald-800 tracking-wider uppercase block">
+                  {routedModel ? 'CURRENT TASK ROUTE' : 'CONFIGURED LOCAL ROUTES'}
+                </span>
+
+                {routedModel ? (
+                  <div className="space-y-2.5 text-xs">
+                    <div className="flex justify-between py-1 border-b border-slate-100">
+                      <span className="text-slate-500">Selected Model:</span>
+                      <span className="font-mono font-bold text-slate-900">{routedModel}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-100">
+                      <span className="text-slate-500">Routing Tier:</span>
+                      <span className="font-semibold text-emerald-800">{routedTier || 'general-reasoning'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-100">
+                      <span className="text-slate-500">Temperature:</span>
+                      <span className="font-mono text-slate-800">{routedTemp ?? 0.7}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-slate-100">
+                      <span className="text-slate-500">Classification:</span>
+                      <span className="font-semibold text-slate-800">{classificationTier}</span>
+                    </div>
+                    <div className="flex justify-between py-1">
+                      <span className="text-slate-500">External API:</span>
+                      <span className="font-semibold text-emerald-700">
+                        {externalApiAllowed ? 'Allowed' : 'Blocked (Local Only)'}
+                      </span>
+                    </div>
+                  </div>
+                ) : models.length > 0 ? (
+                  <div className="space-y-2 text-xs">
+                    {models.map((mod, idx) => (
+                      <div key={idx} className={`flex justify-between py-1 ${idx < models.length - 1 ? 'border-b border-slate-100' : ''}`}>
+                        <span className="text-slate-500 capitalize">{mod.role || 'On-Premise Model'}:</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-bold text-slate-800">{mod.name}</span>
+                          <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${mod.available && modelRegistryData?.ollama_connected ? 'text-emerald-700 bg-emerald-50' : 'text-rose-700 bg-rose-50'}`}>
+                            {mod.available && modelRegistryData?.ollama_connected ? 'Ready' : 'Offline'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="py-2 text-xs text-slate-500 italic">
+                    {modelRegistryLoading ? 'Probing configured model routes...' : 'Model registry data not available.'}
+                  </div>
+                )}
+              </div>
+
+              <div className="bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 flex flex-col justify-between">
+                <div>
+                  <span className="text-[11px] font-bold text-emerald-800 tracking-wider uppercase block">
+                    LOCAL EXECUTION ENGINE
+                  </span>
+                  <h3 className="text-lg font-bold text-slate-900 mt-2">
+                    {routedModel ? routedModel : 'Ollama Model Fabric'}
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-1">
+                    {routedModel
+                      ? `Dynamically routed for current execution. External cloud fallbacks are disabled by architecture.`
+                      : 'Tasks are evaluated at runtime by ModelRouter and dispatched to local Ollama open-weight models.'}
+                  </p>
+                </div>
+
+                <button
+                  onClick={() => setScreen('model_registry')}
+                  className="mt-6 w-full py-3 px-5 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition flex items-center justify-center gap-2"
+                >
+                  <Cpu className="w-4 h-4" /> View model registry
+                </button>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ------------------------------------------------------------- */}
       {/* 9. WEB 9 — MULTIMODAL DOCUMENT WORKSPACE                      */}
@@ -855,53 +1215,84 @@ export default function App() {
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
             <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-4">
-              <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">SCANNED PDF</span>
-              <div className="space-y-2.5">
-                {[1, 2, 3, 4, 5, 6, 7, 8].map((line) => (
-                  <div key={line} className="h-6 w-full bg-slate-50 border border-slate-200/80 rounded-full" />
-                ))}
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-emerald-800 uppercase tracking-wider block">
+                  DOCUMENT PREVIEW
+                </span>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {documentProcessed?.bytes ? `${documentProcessed.bytes} bytes` : `${(docContext || '').length} chars`}
+                </span>
+              </div>
+              <div className="bg-slate-50/90 border border-slate-200/80 rounded-2xl p-3.5 max-h-64 overflow-y-auto space-y-2">
+                <span className="text-[10px] font-bold font-mono text-slate-500 block uppercase truncate">
+                  {attachedFileName}
+                </span>
+                <p className="text-xs text-slate-700 leading-relaxed font-sans whitespace-pre-wrap">
+                  {docContext || 'No document content extracted. Attach a document to inspect.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-3.5 text-xs">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">DOCUMENT SOURCE</span>
+                <p className="text-sm font-bold text-slate-800 mt-0.5 font-mono truncate">{attachedFileName || 'None'}</p>
+              </div>
+
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">PROCESSING STATUS</span>
+                <span className="inline-block mt-0.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  {documentProcessed?.status || (docContext ? 'PROCESSED' : 'Not processed')}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">INPUT SHA-256</span>
+                <p className="text-[11px] font-mono text-slate-700 mt-0.5 break-all">
+                  {documentProcessed?.sha256 || agentResult?.audit_record?.input_sha256 || 'Not computed'}
+                </p>
+              </div>
+
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">SECURITY CLASSIFICATION</span>
+                <span className="font-semibold text-slate-800 mt-0.5 block">
+                  {agentResult?.security?.classification || classification}
+                </span>
+              </div>
+
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">VERIFICATION STATE</span>
+                <span className="font-semibold text-emerald-800 mt-0.5 block">
+                  {agentResult?.verification?.status
+                    ? `${agentResult.verification.status} (${agentResult.verification.grounded ? 'Grounded' : 'Ungrounded'})`
+                    : 'Pending agent execution'}
+                </span>
               </div>
             </div>
 
             <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-4">
-              <div>
-                <span className="text-xs font-bold text-emerald-800 block">Equipment</span>
-                <p className="text-sm font-medium text-emerald-700 mt-0.5">Compressor C-204</p>
-              </div>
-
-              <div>
-                <span className="text-xs font-bold text-emerald-800 block">Date</span>
-                <p className="text-sm font-medium text-emerald-700 mt-0.5">14 Aug 2026</p>
-              </div>
-
-              <div>
-                <span className="text-xs font-bold text-emerald-800 block">Finding</span>
-                <p className="text-sm font-medium text-emerald-700 mt-0.5">Surface corrosion</p>
-              </div>
-
-              <div>
-                <span className="text-xs font-bold text-emerald-800 block">Severity</span>
-                <p className="text-sm font-medium text-emerald-700 mt-0.5">Medium</p>
-              </div>
-
-              <div>
-                <span className="text-xs font-bold text-emerald-800 block">Confidence</span>
-                <p className="text-sm font-medium text-emerald-700 mt-0.5">94%</p>
-              </div>
-            </div>
-
-            <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-5">
-              <div onClick={() => setScreen('knowledge')} className="cursor-pointer hover:underline">
-                <p className="text-sm font-medium text-emerald-800">Maintenance SOP v4</p>
-              </div>
-
-              <div onClick={() => setScreen('knowledge')} className="cursor-pointer hover:underline">
-                <p className="text-sm font-medium text-emerald-800">Inspection Manual</p>
-              </div>
-
-              <div onClick={() => setScreen('knowledge')} className="cursor-pointer hover:underline">
-                <p className="text-sm font-medium text-emerald-800">Previous report</p>
-              </div>
+              <span className="text-[10px] font-bold text-emerald-800 tracking-wider uppercase block">
+                REFERENCED KNOWLEDGE
+              </span>
+              {ragStats?.documents && ragStats.documents.length > 0 ? (
+                ragStats.documents.slice(0, 3).map((doc, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      setKnowledgeSearchQuery(doc.filename || 'Maintenance SOP');
+                      setScreen('knowledge');
+                    }}
+                    className="cursor-pointer hover:underline"
+                  >
+                    <p className="text-sm font-medium text-emerald-800">{doc.filename || doc.document_id}</p>
+                    <span className="text-[10px] text-slate-400 font-mono">{doc.classification} • {doc.environment}</span>
+                  </div>
+                ))
+              ) : (
+                <div onClick={() => setScreen('knowledge')} className="cursor-pointer hover:underline">
+                  <p className="text-sm font-medium text-slate-500">Query private RAG store</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -926,28 +1317,161 @@ export default function App() {
             </button>
           </div>
 
-          <div className="bg-white/95 rounded-2xl p-4 shadow-sm border border-emerald-100/80">
+          {/* RAG Vectorstore & Collection Stats Banner */}
+          <div className="bg-white/95 rounded-2xl p-4 shadow-sm border border-emerald-100/80 space-y-2">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">VECTOR STORE</span>
+                <span className="font-semibold text-emerald-800 flex items-center gap-1 mt-0.5">
+                  {ragStatsLoading ? (
+                    <Loader2 className="w-3 h-3 animate-spin text-emerald-700" />
+                  ) : ragStats ? (
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-700" />
+                  )}
+                  {ragStatsLoading ? 'Connecting...' : ragStats ? 'ChromaDB (Local)' : 'Unavailable'}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">COLLECTION</span>
+                <span className="font-semibold text-slate-800 font-mono mt-0.5 block">enterprise_knowledge</span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">CHUNKS INDEXED</span>
+                <span className="font-semibold text-emerald-700 font-mono mt-0.5 block">
+                  {ragStats?.total_count ?? (ragStatsLoading ? '...' : 'Not available')}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">EMBEDDING MODEL</span>
+                <span className="font-semibold text-slate-800 font-mono mt-0.5 block truncate" title="all-MiniLM-L6-v2 (In-process PyTorch)">
+                  all-MiniLM-L6-v2
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Search Bar */}
+          <div className="bg-white/95 rounded-2xl p-4 shadow-sm border border-emerald-100/80 flex items-center gap-2">
+            <Search className="w-4 h-4 text-slate-400 flex-shrink-0" />
             <input
               type="text"
               value={knowledgeSearchQuery}
               onChange={(e) => setKnowledgeSearchQuery(e.target.value)}
               onKeyDown={handleExecuteRAGSearch}
-              placeholder="Search organizational knowledge"
+              placeholder="Search organizational knowledge (e.g. Compressor C-204 maintenance SOP vibration)"
               className="w-full bg-transparent text-sm text-slate-800 focus:outline-none placeholder-slate-400"
             />
+            <button
+              onClick={handleExecuteRAGSearch}
+              disabled={knowledgeLoading || !knowledgeSearchQuery.trim()}
+              className="py-1.5 px-3 rounded-xl font-semibold text-xs text-white bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 transition flex items-center gap-1 flex-shrink-0"
+            >
+              {knowledgeLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Search'}
+            </button>
           </div>
 
+          {/* Search or Stats Error Banner */}
+          {(knowledgeError || ragStatsError) && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+              <span>{knowledgeError || ragStatsError}</span>
+            </div>
+          )}
+
+          {/* Retrieval Results Section */}
           <div className="space-y-3">
-            <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase block">RESULTS</span>
-            {knowledgeResults.map((item, i) => (
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase block">
+                RETRIEVAL EVIDENCE {knowledgeResults ? `(${knowledgeResults.length})` : ''}
+              </span>
+              <span className="text-[10px] text-slate-400">
+                Clearance: <span className="font-semibold text-slate-700">{role}</span>
+              </span>
+            </div>
+
+            {knowledgeLoading && (
+              <div className="bg-white/95 rounded-2xl p-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2 border border-emerald-100/80">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-700" />
+                <span>Searching private ChromaDB vectorstore with all-MiniLM-L6-v2...</span>
+              </div>
+            )}
+
+            {!knowledgeLoading && knowledgeResults === null && (
+              <div className="bg-white/95 rounded-2xl p-6 text-center text-xs text-slate-500 border border-slate-200">
+                Enter an engineering query or SOP topic above and press Enter to search the private ChromaDB index.
+              </div>
+            )}
+
+            {!knowledgeLoading && knowledgeResults !== null && knowledgeResults.length === 0 && (
+              <div className="bg-white/95 rounded-2xl p-6 text-center text-xs text-slate-500 border border-slate-200">
+                No matching knowledge chunks found in production index for current search under {role} permissions.
+              </div>
+            )}
+
+            {!knowledgeLoading && knowledgeResults && knowledgeResults.map((item, i) => (
               <div
                 key={i}
-                className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
+                className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80 space-y-2"
               >
-                <span className="text-sm font-bold text-emerald-800">{item.title}</span>
-                <span className="text-xs font-medium text-emerald-700">{item.tag}</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-bold text-emerald-900 font-mono">
+                    {item.metadata?.filename || item.metadata?.source || item.chunk_id}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    {item.similarity_score !== undefined && (
+                      <span className="text-[10px] font-bold font-mono px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        {(item.similarity_score * 100).toFixed(1)}% match
+                      </span>
+                    )}
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                      {item.classification || item.metadata?.classification || 'GENERAL'}
+                    </span>
+                    <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-100/60 text-emerald-800">
+                      {item.metadata?.environment || 'production'}
+                    </span>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-700 leading-relaxed font-sans bg-slate-50/70 p-3 rounded-xl border border-slate-100">
+                  {item.text}
+                </p>
               </div>
             ))}
+          </div>
+
+          {/* Indexed Repository Documents Section (Document Listing) */}
+          <div className="space-y-3 pt-2">
+            <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase block">
+              INDEXED REPOSITORY DOCUMENTS
+            </span>
+            {ragStats?.documents && ragStats.documents.length > 0 ? (
+              <div className="space-y-2">
+                {ragStats.documents.map((doc, idx) => (
+                  <div
+                    key={idx}
+                    className="bg-white/95 rounded-2xl px-5 py-3 shadow-sm border border-emerald-100/80 flex items-center justify-between text-xs"
+                  >
+                    <div>
+                      <span className="font-bold font-mono text-slate-900 block">{doc.filename || doc.document_id}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">ID: {doc.id}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                        {doc.classification}
+                      </span>
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        Indexed ({doc.environment})
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="bg-white/95 rounded-2xl p-4 text-center text-xs text-slate-500 border border-slate-200">
+                {ragStatsLoading ? 'Loading repository documents...' : 'No knowledge records available through the current API.'}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -987,24 +1511,75 @@ export default function App() {
           </div>
 
           <div className="space-y-3">
-            {filesList
-              .filter((f) => fileFilter === 'All' || f.category === fileFilter || f.security === fileFilter)
-              .map((file, idx) => (
-                <div
-                  key={idx}
-                  onClick={() => {
-                    setAttachedFileName(file.name);
-                    setScreen('document');
-                  }}
-                  className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between cursor-pointer hover:border-emerald-300 transition"
-                >
-                  <span className="text-sm font-bold text-slate-800">{file.name}</span>
-                  <div className="flex items-center gap-6 text-xs font-medium">
-                    <span className="text-emerald-700">{file.type}</span>
-                    <span className="text-emerald-700">{file.security}</span>
+            {(() => {
+              const workspaceFiles = [];
+              if (attachedFileName) {
+                workspaceFiles.push({
+                  name: attachedFileName,
+                  type: attachedFileName.split('.').pop().toUpperCase(),
+                  security: agentResult?.security?.classification || classification,
+                  category: 'Recent',
+                  badge: 'Active Input',
+                });
+              }
+              if (ragStats?.documents) {
+                ragStats.documents.forEach((doc) => {
+                  workspaceFiles.push({
+                    name: doc.filename || doc.document_id,
+                    type: (doc.filename || '').split('.').pop().toUpperCase() || 'TXT',
+                    security: doc.classification || 'GENERAL',
+                    category: 'Projects',
+                    badge: `Indexed (${doc.environment})`,
+                  });
+                });
+              }
+              if (agentResult?.deliverable?.filename) {
+                workspaceFiles.push({
+                  name: agentResult.deliverable.filename,
+                  type: 'DOCX',
+                  security: agentResult?.security?.classification || 'CONFIDENTIAL',
+                  category: 'Critical',
+                  badge: 'Deliverable',
+                });
+              }
+
+              const filtered = workspaceFiles.filter(
+                (f) => fileFilter === 'All' || f.category === fileFilter || f.security === fileFilter
+              );
+
+              return filtered.length > 0 ? (
+                filtered.map((file, idx) => (
+                  <div
+                    key={idx}
+                    onClick={() => {
+                      if (file.badge === 'Deliverable') {
+                        setScreen('deliverables');
+                      } else if (file.badge.includes('Indexed')) {
+                        setKnowledgeSearchQuery(file.name);
+                        setScreen('knowledge');
+                      } else {
+                        setAttachedFileName(file.name);
+                        setScreen('document');
+                      }
+                    }}
+                    className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between cursor-pointer hover:border-emerald-300 transition"
+                  >
+                    <div>
+                      <span className="text-sm font-bold text-slate-800 block">{file.name}</span>
+                      <span className="text-[10px] text-slate-400 font-mono">{file.badge}</span>
+                    </div>
+                    <div className="flex items-center gap-4 text-xs font-medium">
+                      <span className="text-slate-600 font-mono">{file.type}</span>
+                      <span className="text-emerald-700 font-semibold">{file.security}</span>
+                    </div>
                   </div>
+                ))
+              ) : (
+                <div className="bg-white/95 rounded-2xl p-6 text-center text-xs text-slate-500 border border-slate-200">
+                  No files match the selected filter.
                 </div>
-              ))}
+              );
+            })()}
           </div>
         </div>
       )}
@@ -1036,7 +1611,9 @@ export default function App() {
               >
                 <div>
                   <h3 className="text-base font-bold text-slate-900">{proj.name}</h3>
-                  <p className="text-xs text-emerald-700 mt-1 font-medium">{proj.files} files • {proj.tasks} tasks</p>
+                  <p className="text-xs text-emerald-700 mt-1 font-medium">
+                    {proj.name === projectTitle ? 'Active Project • Current Workspace' : `${proj.status}`}
+                  </p>
                 </div>
                 <button
                   onClick={() => {
@@ -1056,155 +1633,856 @@ export default function App() {
       {/* ------------------------------------------------------------- */}
       {/* 13. WEB 13 — APPROVALS                                        */}
       {/* ------------------------------------------------------------- */}
-      {screen === 'approvals' && (
-        <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">GOVERNANCE</span>
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Approvals</h1>
-              <p className="text-slate-600 text-sm mt-1">Human review for consequential actions.</p>
-            </div>
-            <button
-              onClick={() => setScreen('execution')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          </div>
+      {screen === 'approvals' && (() => {
+        const riskLevel = agentResult?.risk?.risk_level || 'UNKNOWN';
+        const humanGateStatus = agentResult?.human_gate?.human_gate_status || (riskLevel === 'LOW' ? 'NOT_REQUIRED' : 'PENDING');
+        const isLowRisk = riskLevel === 'LOW' || humanGateStatus === 'NOT_REQUIRED';
+        const isPending = humanGateStatus === 'PENDING';
+        const isApproved = humanGateStatus === 'APPROVED';
+        const isRejected = humanGateStatus === 'REJECTED';
+        const isEditRequired = humanGateStatus === 'EDIT_REQUIRED';
+        const evidenceCount = agentResult ? (agentResult.retrieved_sources ?? (agentResult.verification?.evidence_sources ?? 0)) : 0;
 
-          <div className="bg-white/95 rounded-3xl p-8 shadow-sm border border-emerald-100/80 space-y-6">
-            <div>
-              <h3 className="text-xl font-bold text-slate-900">Approval Required</h3>
-              <div className="mt-2">
-                <span className="inline-block text-[11px] font-bold px-3 py-1 rounded-full border border-slate-200 text-emerald-800 tracking-wide">
-                  HIGH
+        return (
+          <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">GOVERNANCE</span>
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Approvals</h1>
+                <p className="text-slate-600 text-sm mt-1">Human review for consequential actions.</p>
+              </div>
+              <button
+                onClick={() => setScreen('execution')}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            </div>
+
+            {approvalError && (
+              <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 flex items-start gap-3 text-rose-800 text-sm animate-in fade-in">
+                <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold block">Authorization Notice</span>
+                  <p className="text-xs text-rose-700 mt-0.5 font-mono">{approvalError}</p>
+                </div>
+              </div>
+            )}
+
+            {approvalSuccessMessage && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-4 flex items-start gap-3 text-emerald-800 text-sm animate-in fade-in">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-bold block">Action Completed</span>
+                  <p className="text-xs text-emerald-700 mt-0.5">{approvalSuccessMessage}</p>
+                </div>
+              </div>
+            )}
+
+            <div className="bg-white/95 rounded-3xl p-8 shadow-sm border border-emerald-100/80 space-y-6">
+              <div>
+                <h3 className="text-xl font-bold text-slate-900">
+                  {!agentResult
+                    ? 'No Active Task Pending Approval'
+                    : isLowRisk
+                    ? 'Approval Not Required'
+                    : isApproved
+                    ? 'Task Approved'
+                    : isRejected
+                    ? 'Task Rejected'
+                    : isEditRequired
+                    ? 'Changes Requested'
+                    : 'Approval Required'}
+                </h3>
+                <div className="mt-2 flex items-center gap-2">
+                  <span
+                    className={`inline-block text-[11px] font-bold px-3 py-1 rounded-full border tracking-wide ${
+                      riskLevel === 'HIGH'
+                        ? 'border-rose-200 text-rose-700 bg-rose-50'
+                        : riskLevel === 'MEDIUM'
+                        ? 'border-amber-200 text-amber-800 bg-amber-50'
+                        : isLowRisk
+                        ? 'border-emerald-200 text-emerald-800 bg-emerald-50'
+                        : 'border-slate-200 text-slate-700 bg-slate-50'
+                    }`}
+                  >
+                    {riskLevel}
+                  </span>
+                  {humanGateStatus && (
+                    <span className="text-[10px] font-mono px-2.5 py-1 rounded-full border border-slate-200 text-slate-600 uppercase">
+                      Gate: {humanGateStatus}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <h4 className="text-sm font-bold text-slate-900">
+                  {taskPrompt || agentResult?.plan?.task || 'Inspection Report → Approval Note'}
+                </h4>
+                {agentResult?.task_id && (
+                  <span className="text-[10px] font-mono text-slate-500 block mt-0.5">
+                    Task ID: {agentResult.task_id}
+                  </span>
+                )}
+                <p className="text-xs text-emerald-700 mt-1 font-medium">
+                  {!agentResult
+                    ? 'No workflow has been executed yet. Initiate a task from the Command Center.'
+                    : isLowRisk
+                    ? (agentResult.human_gate?.gate_reason || 'Informational task meets low-risk criteria. Human gate not required for deliverable access.')
+                    : isApproved
+                    ? `Authorized by ${agentResult.human_gate?.approved_by || authLabel} (${agentResult.human_gate?.approver_role || role}). Controlled deliverable generated.`
+                    : isRejected
+                    ? `Rejected by ${agentResult.human_gate?.rejected_by || authLabel} (${agentResult.human_gate?.rejector_role || role}). Controlled deliverable blocked.`
+                    : isEditRequired
+                    ? `Revisions requested by ${agentResult.human_gate?.edit_requested_by || authLabel}: ${agentResult.human_gate?.edit_instructions || 'Edits required.'}`
+                    : (agentResult.human_gate?.gate_reason || agentResult.human_gate?.summary || 'Recommendation prepared and held pending authorized human sign-off.')}
+                </p>
+              </div>
+
+              <div className="flex items-center gap-4 text-xs font-medium text-emerald-800">
+                <span onClick={() => setScreen('document')} className="cursor-pointer hover:underline">
+                  Evidence • {evidenceCount} {evidenceCount === 1 ? 'source' : 'sources'}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Check className="w-3.5 h-3.5 stroke-[2.5]" /> Validation {agentResult?.verification?.status ? `• ${agentResult.verification.status}` : ''}
+                </span>
+                <span onClick={() => setScreen('provenance')} className="flex items-center gap-1 cursor-pointer hover:underline">
+                  <Check className="w-3.5 h-3.5 stroke-[2.5]" /> Provenance {agentResult?.audit_record ? '• Recorded' : ''}
                 </span>
               </div>
-            </div>
 
-            <div>
-              <h4 className="text-sm font-bold text-slate-900">Inspection Report → Approval Note</h4>
-              <p className="text-xs text-emerald-700 mt-1 font-medium">Recommendation prepared and validated against SOP.</p>
-            </div>
+              {isPending && (
+                <div className="pt-2">
+                  <input
+                    type="text"
+                    placeholder="Reviewer note / instructions (optional)"
+                    value={approvalComment}
+                    onChange={(e) => setApprovalComment(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                </div>
+              )}
 
-            <div className="flex items-center gap-4 text-xs font-medium text-emerald-800">
-              <span onClick={() => setScreen('document')} className="cursor-pointer hover:underline">Evidence • 3 sources</span>
-              <span className="flex items-center gap-1"><Check className="w-3.5 h-3.5 stroke-[2.5]" /> Validation</span>
-              <span onClick={() => setScreen('provenance')} className="flex items-center gap-1 cursor-pointer hover:underline"><Check className="w-3.5 h-3.5 stroke-[2.5]" /> Provenance</span>
-            </div>
+              <div className="flex flex-wrap gap-3 pt-2">
+                {!agentResult && (
+                  <button
+                    onClick={() => setScreen('command_center')}
+                    className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md transition"
+                  >
+                    Return to Command Center
+                  </button>
+                )}
 
-            <div className="flex flex-wrap gap-3 pt-2">
-              <button
-                onClick={() => {
-                  setApprovalDecision('APPROVED');
-                  setScreen('deliverables');
-                }}
-                className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition"
-              >
-                Approve
-              </button>
-              <button
-                onClick={() => {
-                  setApprovalDecision('CHANGES_REQUESTED');
-                  setScreen('execution');
-                }}
-                className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 shadow-md transition"
-              >
-                Request changes
-              </button>
-              <button
-                onClick={() => {
-                  setApprovalDecision('REJECTED');
-                  setScreen('command_center');
-                }}
-                className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md transition"
-              >
-                Reject
-              </button>
+                {agentResult && isLowRisk && (
+                  <>
+                    <button
+                      onClick={() => setScreen('deliverables')}
+                      className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition flex items-center gap-2"
+                    >
+                      View deliverable <ArrowRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setScreen('execution')}
+                      className="py-3 px-6 rounded-2xl font-semibold text-emerald-800 text-sm bg-white border border-emerald-200 hover:bg-emerald-50 transition"
+                    >
+                      Back to execution
+                    </button>
+                  </>
+                )}
+
+                {agentResult && isPending && (
+                  <>
+                    <button
+                      onClick={handleApproveTask}
+                      disabled={approvalLoading}
+                      className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      Approve
+                    </button>
+                    <button
+                      onClick={handleEditTask}
+                      disabled={approvalLoading}
+                      className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 shadow-md transition flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      Request changes
+                    </button>
+                    <button
+                      onClick={handleRejectTask}
+                      disabled={approvalLoading}
+                      className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-rose-700 to-rose-600 hover:from-rose-800 hover:to-rose-700 shadow-md transition flex items-center gap-2 disabled:opacity-50"
+                    >
+                      {approvalLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                      Reject
+                    </button>
+                  </>
+                )}
+
+                {agentResult && isApproved && (
+                  <>
+                    <button
+                      onClick={() => setScreen('deliverables')}
+                      className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition flex items-center gap-2"
+                    >
+                      Open deliverable <ArrowRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setScreen('execution')}
+                      className="py-3 px-6 rounded-2xl font-semibold text-emerald-800 text-sm bg-white border border-emerald-200 hover:bg-emerald-50 transition"
+                    >
+                      Back to execution
+                    </button>
+                  </>
+                )}
+
+                {agentResult && (isRejected || isEditRequired) && (
+                  <>
+                    <button
+                      onClick={() => setScreen('execution')}
+                      className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md transition"
+                    >
+                      Return to execution
+                    </button>
+                    <button
+                      onClick={() => setScreen('command_center')}
+                      className="py-3 px-6 rounded-2xl font-semibold text-slate-700 text-sm bg-white border border-slate-200 hover:bg-slate-50 transition"
+                    >
+                      Command center
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ------------------------------------------------------------- */}
       {/* 14. WEB 14 — DELIVERABLES                                     */}
       {/* ------------------------------------------------------------- */}
-      {screen === 'deliverables' && (
-        <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">OUTPUT</span>
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Deliverables</h1>
-              <p className="text-slate-600 text-sm mt-1">Real files produced by controlled workflows.</p>
-            </div>
-            <button
-              onClick={() => setScreen('command_center')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          </div>
+      {screen === 'deliverables' && (() => {
+        const taskId = agentResult?.task_id;
+        const riskLevel = agentResult?.risk?.risk_level || 'UNKNOWN';
+        const humanGateStatus = agentResult?.human_gate?.human_gate_status || 'UNKNOWN';
+        const deliveryStatus = agentResult?.delivery?.delivery_status || 'UNKNOWN';
+        const deliverable = agentResult?.deliverable;
+        const hasDeliverable = Boolean(deliverable && deliverable.filename);
+        const isPending = humanGateStatus === 'PENDING' || deliveryStatus === 'PENDING_APPROVAL';
+        const isRejected = humanGateStatus === 'REJECTED' || deliveryStatus === 'REJECTED';
+        const isEditRequired = humanGateStatus === 'EDIT_REQUIRED' || deliveryStatus === 'EDIT_REQUIRED';
 
-          <div className="space-y-3">
-            {deliverablesData.map((del, idx) => (
-              <div
-                key={idx}
-                className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
+        return (
+          <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">OUTPUT</span>
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Deliverables</h1>
+                <p className="text-slate-600 text-sm mt-1">Real files produced by controlled workflows.</p>
+              </div>
+              <button
+                onClick={() => setScreen('command_center')}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
               >
-                <span className="text-sm font-bold text-slate-800">{del.name}</span>
-                <div className="flex items-center gap-6">
-                  <span className="text-xs font-semibold text-emerald-700">{del.status}</span>
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {!agentResult && (
+                <div className="bg-white/95 rounded-2xl p-8 shadow-sm border border-emerald-100/80 text-center space-y-4">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center border border-emerald-100">
+                    <FileText className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">No Active Deliverable</h3>
+                    <p className="text-xs text-slate-600 mt-1">
+                      No agent workflow has been executed yet. Initiate a task from the Command Center to produce controlled deliverables.
+                    </p>
+                  </div>
                   <button
-                    onClick={() => alert(`Opening ${del.name} (Provenance Hash Verified)`)}
-                    className="py-2 px-6 rounded-xl font-bold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition"
+                    onClick={() => setScreen('command_center')}
+                    className="py-2.5 px-6 rounded-xl font-semibold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition"
                   >
-                    Open
+                    Go to Command Center
                   </button>
                 </div>
-              </div>
-            ))}
+              )}
+
+              {agentResult && isPending && (
+                <div className="bg-white/95 rounded-2xl p-6 shadow-sm border border-amber-200/80 space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-bold text-amber-900 uppercase">Task: {taskId}</span>
+                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                          riskLevel === 'HIGH' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-amber-50 text-amber-800 border-amber-200'
+                        }`}>
+                          {riskLevel} RISK
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-900 mt-1">
+                        {taskPrompt || agentResult?.plan?.task || 'Controlled Inspection Deliverable'}
+                      </h3>
+                    </div>
+                    <span className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
+                      Pending Approval
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-2 text-xs border-y border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DELIVERY STATUS</span>
+                      <span className="font-semibold text-slate-800">{deliveryStatus.replace('_', ' ')}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">HUMAN APPROVAL</span>
+                      <span className="font-semibold text-amber-700">Required (Pending)</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">SHA-256 HASH</span>
+                      <span className="font-mono text-slate-500 text-[11px]">Held (Not Generated)</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DOCX FILE</span>
+                      <span className="font-semibold text-slate-500">Awaiting Sign-off</span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    {agentResult?.delivery?.delivery_message || 'Deliverable generation is held pending authorized human review. Complete the approval workflow to generate the controlled DOCX.'}
+                  </p>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[11px] text-amber-800 font-medium flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      Sign-off required by ADMIN or REVIEWER
+                    </span>
+                    <button
+                      onClick={() => setScreen('approvals')}
+                      className="py-2 px-5 rounded-xl font-bold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition flex items-center gap-1"
+                    >
+                      Review in Approvals <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {agentResult && isRejected && (
+                <div className="bg-white/95 rounded-2xl p-6 shadow-sm border border-rose-200/80 space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-bold text-rose-800">Task: {taskId}</span>
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border bg-rose-50 text-rose-700 border-rose-200">
+                          {riskLevel} RISK
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-900 mt-1">
+                        {taskPrompt || agentResult?.plan?.task || 'Controlled Inspection Deliverable'}
+                      </h3>
+                    </div>
+                    <span className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-1 rounded-full">
+                      Rejected / Blocked
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-2 text-xs border-y border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DELIVERY STATUS</span>
+                      <span className="font-semibold text-rose-700">REJECTED</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">HUMAN APPROVAL</span>
+                      <span className="font-semibold text-rose-700">Denied</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">SHA-256 HASH</span>
+                      <span className="font-mono text-slate-500 text-[11px]">Blocked</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DOCX FILE</span>
+                      <span className="font-semibold text-rose-600">Generation Blocked</span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-rose-700 leading-relaxed">
+                    {agentResult?.delivery?.delivery_message || 'Controlled deliverable generation was rejected by authorized human reviewer. No document generated.'}
+                  </p>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      onClick={() => setScreen('command_center')}
+                      className="py-2 px-5 rounded-xl font-bold text-white text-xs bg-slate-700 hover:bg-slate-800 shadow-sm transition"
+                    >
+                      Back to Command Center
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {agentResult && isEditRequired && (
+                <div className="bg-white/95 rounded-2xl p-6 shadow-sm border border-amber-200/80 space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-bold text-amber-800">Task: {taskId}</span>
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-200">
+                          {riskLevel} RISK
+                        </span>
+                      </div>
+                      <h3 className="text-sm font-bold text-slate-900 mt-1">
+                        {taskPrompt || agentResult?.plan?.task || 'Controlled Inspection Deliverable'}
+                      </h3>
+                    </div>
+                    <span className="text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1 rounded-full">
+                      Held (Edit Required)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-2 text-xs border-y border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DELIVERY STATUS</span>
+                      <span className="font-semibold text-amber-800">EDIT REQUIRED</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">HUMAN APPROVAL</span>
+                      <span className="font-semibold text-amber-800">Changes Requested</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">SHA-256 HASH</span>
+                      <span className="font-mono text-slate-500 text-[11px]">Held Pending Edit</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DOCX FILE</span>
+                      <span className="font-semibold text-amber-700">Pending Revision</span>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-amber-900 leading-relaxed">
+                    {agentResult?.delivery?.delivery_message || `Edits requested: ${agentResult?.human_gate?.edit_instructions || 'Adjustments required.'}`}
+                  </p>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      onClick={() => setScreen('execution')}
+                      className="py-2 px-5 rounded-xl font-bold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition"
+                    >
+                      Revise in Execution
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {agentResult && hasDeliverable && (
+                <div className="bg-white/95 rounded-2xl p-6 shadow-sm border border-emerald-200 space-y-4">
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-mono font-bold text-emerald-800">Task: {taskId}</span>
+                        <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full border ${
+                          riskLevel === 'LOW' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-amber-50 text-amber-800 border-amber-200'
+                        }`}>
+                          {riskLevel} RISK
+                        </span>
+                      </div>
+                      <h3 className="text-base font-bold text-slate-900 mt-1 flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-emerald-700" />
+                        {deliverable.filename}
+                      </h3>
+                    </div>
+                    <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-300 px-3 py-1 rounded-full flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      {agentResult?.verification?.status === 'PASSED' ? 'Verified' : (agentResult?.verification?.status || 'Completed')}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 py-2 text-xs border-y border-slate-100">
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">DELIVERY STATUS</span>
+                      <span className="font-semibold text-emerald-700">DELIVERED</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">HUMAN APPROVAL</span>
+                      <span className="font-semibold text-slate-800">
+                        {humanGateStatus === 'NOT_REQUIRED' ? 'Not Required (Low Risk)' : 'Approved'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">FILE SIZE</span>
+                      <span className="font-semibold text-slate-800">
+                        {deliverable.file_size_bytes ? `${Math.round(deliverable.file_size_bytes / 1024)} KB` : 'Not available'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block text-[10px]">GENERATED AT</span>
+                      <span className="font-semibold text-slate-800">
+                        {deliverable.generated_at ? new Date(deliverable.generated_at).toLocaleTimeString() : 'Not available'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* SHA-256 Provenance Row */}
+                  <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-xl space-y-1">
+                    <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold">
+                      <span className="uppercase">SHA-256 Provenance Hash</span>
+                      <span className="text-emerald-700 font-bold flex items-center gap-1">
+                        <Check className="w-3 h-3 stroke-[2.5]" /> Authenticated File
+                      </span>
+                    </div>
+                    <p className="font-mono text-[11px] text-slate-700 break-all select-all">
+                      {deliverable.sha256}
+                    </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-xs text-slate-500">
+                      Format: <span className="font-mono text-[11px] font-semibold text-slate-700">DOCX</span>
+                    </span>
+                    <button
+                      onClick={() => setSelectedDeliverable(selectedDeliverable === deliverable.filename ? null : deliverable.filename)}
+                      className="py-2 px-6 rounded-xl font-bold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition"
+                    >
+                      {selectedDeliverable === deliverable.filename ? 'Hide details' : 'Open'}
+                    </button>
+                  </div>
+
+                  {/* Expanded Deliverable Inspector */}
+                  {selectedDeliverable === deliverable.filename && (
+                    <div className="mt-3 p-4 bg-emerald-50/70 border border-emerald-200 rounded-2xl text-xs space-y-3 animate-in fade-in">
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-emerald-900 uppercase tracking-wider text-[11px]">
+                          Deliverable Vault Record
+                        </span>
+                        <span className="text-emerald-800 text-[10px] font-mono">
+                          Task ID: {taskId}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1 text-slate-700 text-xs">
+                        <p><span className="font-semibold text-slate-900">Filename:</span> {deliverable.filename}</p>
+                        <p><span className="font-semibold text-slate-900">Format:</span> Microsoft Word (.docx) Document</p>
+                        <p><span className="font-semibold text-slate-900">Integrity:</span> SHA-256 verified against audit registry</p>
+                        <p><span className="font-semibold text-slate-900">Air-gap Storage Note:</span> Document persisted locally to sovereign deliverables vault. Direct browser binary streaming endpoint is not exposed on this on-premise node.</p>
+                      </div>
+
+                      <div className="pt-2 border-t border-emerald-200/60 flex items-center justify-between">
+                        <span className="text-[11px] text-emerald-800 font-medium">
+                          Authorized Role: {role}
+                        </span>
+                        <button
+                          onClick={() => setScreen('provenance')}
+                          className="text-emerald-800 font-bold text-xs underline hover:text-emerald-950"
+                        >
+                          View Full Audit Provenance
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ------------------------------------------------------------- */}
       {/* 15. WEB 15 — PROVENANCE                                       */}
       {/* ------------------------------------------------------------- */}
-      {screen === 'provenance' && (
-        <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">AUDIT</span>
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Provenance</h1>
-              <p className="text-slate-600 text-sm mt-1">Trace how the final deliverable was produced.</p>
-            </div>
-            <button
-              onClick={() => setScreen('execution')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          </div>
+      {screen === 'provenance' && (() => {
+        const audit = agentResult?.audit_record;
+        const taskId = agentResult?.task_id || audit?.task_id;
+        const inputFilename = audit?.filename || attachedFileName || 'No document attached';
+        const inputHash = audit?.input_sha256;
+        const evidenceCount = audit?.retrieved_evidence ?? agentResult?.retrieved_sources ?? 0;
+        const modelUsed = audit?.model || agentResult?.model?.model;
+        const verificationStatus = audit?.verification?.status || agentResult?.verification?.status;
+        const isGrounded = audit?.verification?.grounded ?? agentResult?.verification?.grounded;
+        const riskLevel = audit?.risk_assessment?.risk_level || agentResult?.risk?.risk_level;
+        const humanGateStatus = audit?.human_gate?.human_gate_status || agentResult?.human_gate?.human_gate_status;
+        const humanApproval = Boolean(audit?.human_approval ?? agentResult?.human_gate?.human_approval ?? false);
+        const deliverableObj = agentResult?.deliverable;
+        const outputDocxSha = audit?.output_docx_sha256 || deliverableObj?.sha256;
+        const outputAnswerSha = audit?.output_sha256;
+        const outputFilename = deliverableObj?.filename || (outputDocxSha ? `${taskId}_deliverable.docx` : null);
+        const deliveryStatus = audit?.delivery_status || agentResult?.delivery?.delivery_status || (outputDocxSha ? 'DELIVERED' : (humanGateStatus === 'PENDING' ? 'PENDING_APPROVAL' : humanGateStatus));
+        const timestamp = audit?.timestamp;
 
-          <div className="space-y-2.5 py-1">
-            {provenanceSteps.map((step) => (
-              <div key={step.id} className="flex items-center justify-between text-xs py-1">
-                <div className="flex items-center gap-3">
-                  <span className="font-mono font-bold text-emerald-800 w-5">{step.id}</span>
-                  <span className="font-bold text-slate-800 tracking-wide">{step.name}</span>
-                </div>
-                <span className="text-emerald-700/80 font-medium">timestamp • source • result • hash</span>
+        // Dynamic lineage steps based solely on real backend data
+        const dynamicSteps = agentResult ? [
+          {
+            id: '01',
+            name: 'INPUT REFERENCE',
+            value: inputFilename,
+            subtext: inputHash ? `SHA-256: ${inputHash.slice(0, 12)}...${inputHash.slice(-6)}` : 'Not available from current task response',
+            status: 'COMPLETED',
+          },
+          {
+            id: '02',
+            name: 'CLASSIFICATION',
+            value: agentResult.security?.classification ? `${agentResult.security.classification} clearance` : 'Not available from current task response',
+            subtext: agentResult.security?.restricted_reason || 'Local classification enforced',
+            status: 'COMPLETED',
+          },
+          {
+            id: '03',
+            name: 'INPUT PROCESSING',
+            value: 'Local Text & Context Ingested',
+            subtext: docContext ? `${docContext.slice(0, 45)}...` : 'Extracted',
+            status: 'COMPLETED',
+          },
+          {
+            id: '04',
+            name: 'KNOWLEDGE RETRIEVAL',
+            value: `${evidenceCount} authoritative ${evidenceCount === 1 ? 'chunk' : 'chunks'} retrieved`,
+            subtext: 'Private RAG Vectorstore',
+            status: 'COMPLETED',
+          },
+          {
+            id: '05',
+            name: 'SOVEREIGN MODEL',
+            value: modelUsed || 'Not available from current task response',
+            subtext: 'Local Ollama air-gapped runtime',
+            status: modelUsed ? 'COMPLETED' : 'UNKNOWN',
+          },
+          {
+            id: '06',
+            name: 'TOOL EXECUTION',
+            value: agentResult.action?.action_type || 'Deterministic Analysis',
+            subtext: 'Controlled execution sandbox',
+            status: 'COMPLETED',
+          },
+          {
+            id: '07',
+            name: 'VALIDATION GATE',
+            value: verificationStatus ? `${verificationStatus} (${isGrounded ? 'Grounded' : 'Ungrounded'})` : 'Not available from current task response',
+            subtext: isGrounded ? 'Claims verified against RAG sources' : 'Grounding unverified',
+            status: verificationStatus === 'PASSED' ? 'COMPLETED' : (verificationStatus ? 'FAILED' : 'UNKNOWN'),
+            color: verificationStatus === 'PASSED' ? 'text-emerald-700' : 'text-amber-700',
+          },
+          {
+            id: '08',
+            name: 'RISK ASSESSMENT',
+            value: riskLevel ? `${riskLevel} RISK` : 'Not available from current task response',
+            subtext: audit?.risk_assessment?.operational_impact ? `Operational impact: ${audit.risk_assessment.operational_impact}` : 'Risk evaluated',
+            status: 'COMPLETED',
+            color: riskLevel === 'HIGH' ? 'text-rose-700' : (riskLevel === 'MEDIUM' ? 'text-amber-700' : 'text-emerald-700'),
+          },
+          {
+            id: '09',
+            name: 'HUMAN GATE',
+            value: (() => {
+              if (humanGateStatus === 'NOT_REQUIRED') return 'Not Required (Autonomous)';
+              if (humanGateStatus === 'APPROVED' || humanApproval === true) return 'APPROVED (Sign-off Verified)';
+              if (humanGateStatus === 'PENDING') return 'PENDING (Awaiting Sign-off)';
+              if (humanGateStatus === 'REJECTED') return 'REJECTED (Generation Blocked)';
+              if (humanGateStatus === 'EDIT_REQUIRED') return 'EDIT REQUIRED (Held)';
+              return humanGateStatus || 'Not available from current task response';
+            })(),
+            subtext: (() => {
+              if (humanApproval === true) return 'Authorized by reviewer';
+              if (humanGateStatus === 'PENDING') return 'Human approval required before delivery';
+              if (humanGateStatus === 'NOT_REQUIRED') return 'Autonomous delivery allowed for low risk';
+              return 'Human gate evaluation recorded';
+            })(),
+            status: (humanApproval === true || humanGateStatus === 'NOT_REQUIRED') ? 'COMPLETED' : (humanGateStatus === 'PENDING' ? 'PENDING' : 'HELD'),
+            color: (humanApproval === true || humanGateStatus === 'NOT_REQUIRED') ? 'text-emerald-700' : (humanGateStatus === 'PENDING' ? 'text-amber-700 font-semibold' : 'text-rose-700'),
+          },
+          {
+            id: '10',
+            name: 'FINAL DELIVERABLE',
+            value: outputFilename || (outputDocxSha ? 'Controlled DOCX' : (humanGateStatus === 'PENDING' ? 'Held Pending Human Approval' : 'No deliverable generated')),
+            subtext: outputDocxSha ? `SHA-256: ${outputDocxSha.slice(0, 12)}...${outputDocxSha.slice(-6)}` : (humanGateStatus === 'PENDING' ? 'Document held in sovereign vault pending sign-off' : 'Not generated'),
+            status: outputDocxSha ? 'COMPLETED' : (humanGateStatus === 'PENDING' ? 'HELD' : 'BLOCKED'),
+            color: outputDocxSha ? 'text-emerald-700' : 'text-slate-500',
+          },
+        ] : [];
+
+        return (
+          <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">AUDIT & PROVENANCE</span>
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Provenance</h1>
+                <p className="text-slate-600 text-sm mt-1">
+                  Cryptographic lineage and execution chain for sovereign tasks.
+                </p>
               </div>
-            ))}
-          </div>
+              <button
+                onClick={() => setScreen('execution')}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800 transition"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            </div>
 
-          <div className="flex justify-center pt-3">
-            <span className="text-xs font-bold px-6 py-2 rounded-full border border-emerald-300 text-emerald-800 bg-white/95 shadow-sm tracking-wider">
-              VERIFIED
-            </span>
+            {!agentResult ? (
+              <div className="bg-white/95 rounded-2xl p-8 shadow-sm border border-emerald-100/80 text-center space-y-4">
+                <div className="w-12 h-12 mx-auto rounded-2xl bg-emerald-50 text-emerald-700 flex items-center justify-center border border-emerald-100">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">No Active Task Provenance</h3>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Execute an agent workflow to generate an auditable cryptographic provenance chain.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setScreen('command_center')}
+                  className="py-2.5 px-6 rounded-xl font-semibold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition"
+                >
+                  Go to Command Center
+                </button>
+              </div>
+            ) : (
+              <>
+                {/* Task Provenance Summary Card */}
+                <div className="bg-white/95 rounded-2xl p-4 shadow-sm border border-emerald-100/80 space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">TASK IDENTIFIER</span>
+                      <span className="font-mono font-bold text-slate-800 text-xs select-all">
+                        {taskId || 'Not available from current task response'}
+                      </span>
+                    </div>
+                    <div className="sm:text-right">
+                      <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">AUDIT TIMESTAMP</span>
+                      <span className="font-semibold text-slate-700 text-xs">
+                        {timestamp ? new Date(timestamp).toLocaleString() : 'Not available from current task response'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+                    <span className="flex items-center gap-1.5">
+                      <Shield className="w-3.5 h-3.5 text-emerald-600" />
+                      Audit Record: <span className="font-mono text-emerald-800 font-semibold">{taskId ? `AUDIT-${taskId}` : 'Not available'}</span>
+                    </span>
+                    <span>
+                      Delivery Status:{' '}
+                      <span className={`font-semibold ${
+                        deliveryStatus === 'DELIVERED' ? 'text-emerald-700' :
+                        deliveryStatus === 'PENDING_APPROVAL' ? 'text-amber-700' :
+                        deliveryStatus === 'REJECTED' ? 'text-rose-700' : 'text-slate-700'
+                      }`}>
+                        {deliveryStatus ? deliveryStatus.replace('_', ' ') : 'Not available'}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
+                {/* Lineage Steps List */}
+                <div className="space-y-2 py-1">
+                  {dynamicSteps.map((step) => (
+                    <div
+                      key={step.id}
+                      className="flex items-start justify-between text-xs py-2 px-3 rounded-xl hover:bg-white/60 transition border border-transparent hover:border-emerald-100/60"
+                    >
+                      <div className="flex items-start gap-3">
+                        <span className="font-mono font-bold text-emerald-800 w-5 mt-0.5">{step.id}</span>
+                        <div>
+                          <span className="font-bold text-slate-800 tracking-wide block">{step.name}</span>
+                          {step.subtext && (
+                            <span className="text-[11px] text-slate-500 font-mono block mt-0.5 max-w-[280px] sm:max-w-md truncate">
+                              {step.subtext}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="text-right ml-2 flex-shrink-0">
+                        <span className={`font-medium block ${step.color || 'text-emerald-800/90'}`}>
+                          {step.value}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Bottom Dynamic Seal Pill */}
+                <div className="flex flex-col items-center gap-3 pt-2">
+                  {deliveryStatus === 'DELIVERED' && verificationStatus === 'PASSED' ? (
+                    <span className="text-xs font-bold px-6 py-2 rounded-full border border-emerald-300 text-emerald-800 bg-white/95 shadow-sm tracking-wider flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 stroke-[2.5]" />
+                      AUDIT CHAIN COMPLETE • VERIFIED
+                    </span>
+                  ) : humanGateStatus === 'PENDING' ? (
+                    <span className="text-xs font-bold px-6 py-2 rounded-full border border-amber-300 text-amber-800 bg-amber-50/95 shadow-sm tracking-wider flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 stroke-[2.5]" />
+                      PROVENANCE RECORDED • PENDING APPROVAL
+                    </span>
+                  ) : humanGateStatus === 'REJECTED' ? (
+                    <span className="text-xs font-bold px-6 py-2 rounded-full border border-rose-300 text-rose-800 bg-rose-50/95 shadow-sm tracking-wider flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-rose-600 stroke-[2.5]" />
+                      PROVENANCE RECORDED • REJECTED
+                    </span>
+                  ) : humanGateStatus === 'EDIT_REQUIRED' ? (
+                    <span className="text-xs font-bold px-6 py-2 rounded-full border border-amber-300 text-amber-800 bg-amber-50/95 shadow-sm tracking-wider flex items-center gap-1.5">
+                      <AlertCircle className="w-4 h-4 text-amber-600 stroke-[2.5]" />
+                      PROVENANCE RECORDED • EDIT REQUIRED
+                    </span>
+                  ) : (
+                    <span className="text-xs font-bold px-6 py-2 rounded-full border border-emerald-200 text-emerald-800 bg-white/95 shadow-sm tracking-wider">
+                      PROVENANCE RECORDED
+                    </span>
+                  )}
+
+                  {/* Cryptographic Hashes Toggle */}
+                  <button
+                    onClick={() => setShowCryptoDetails(!showCryptoDetails)}
+                    className="text-xs text-emerald-800/80 hover:text-emerald-950 font-medium underline transition"
+                  >
+                    {showCryptoDetails ? 'Hide Cryptographic Hashes' : 'Inspect Cryptographic Hashes'}
+                  </button>
+                </div>
+
+                {/* Expanded Cryptographic Detail Panel */}
+                {showCryptoDetails && (
+                  <div className="p-4 bg-white/90 border border-emerald-200/80 rounded-2xl text-xs space-y-3 shadow-sm animate-in fade-in">
+                    <div className="flex items-center justify-between border-b border-emerald-100 pb-2">
+                      <span className="font-bold text-emerald-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                        <Terminal className="w-3.5 h-3.5 text-emerald-700" />
+                        Cryptographic Verification Details
+                      </span>
+                      <span className="text-slate-400 font-mono text-[10px]">SHA-256 Digest Engine</span>
+                    </div>
+
+                    <div className="space-y-2.5">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">INPUT SHA-256 (Task + Document)</span>
+                        <p className="font-mono text-[11px] text-slate-800 break-all select-all bg-slate-50 p-2 rounded-lg border border-slate-200/70 mt-0.5">
+                          {inputHash || 'Not available from current task response'}
+                        </p>
+                      </div>
+
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">REASONING OUTPUT SHA-256</span>
+                        <p className="font-mono text-[11px] text-slate-800 break-all select-all bg-slate-50 p-2 rounded-lg border border-slate-200/70 mt-0.5">
+                          {outputAnswerSha || 'Not available from current task response'}
+                        </p>
+                      </div>
+
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block">DELIVERABLE DOCX SHA-256</span>
+                        <p className="font-mono text-[11px] text-slate-800 break-all select-all bg-slate-50 p-2 rounded-lg border border-slate-200/70 mt-0.5">
+                          {outputDocxSha || (humanGateStatus === 'PENDING' ? 'Held pending human approval (no deliverable generated)' : 'Not available from current task response')}
+                        </p>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                        <span>Lineage Integrity: <span className="text-emerald-700 font-semibold">100% On-Premise Audit Ledger</span></span>
+                        <span>Air-gap Sovereign Storage</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ------------------------------------------------------------- */}
       {/* 16. WEB 16 — SOVEREIGN SECURITY                               */}
@@ -1253,28 +2531,36 @@ export default function App() {
                 <div className="space-y-4 mt-4">
                   <div className="flex items-center justify-between text-xs font-medium">
                     <span className="text-emerald-800">External connections</span>
-                    <span className="text-base font-bold text-slate-900">0</span>
+                    <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                      Not instrumented
+                    </span>
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-medium">
                     <span className="text-emerald-800">External AI/API calls</span>
-                    <span className="text-base font-bold text-slate-900">0</span>
+                    <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                      Not instrumented
+                    </span>
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-medium">
                     <span className="text-emerald-800">Data egress</span>
-                    <span className="text-base font-bold text-slate-900">0 bytes</span>
+                    <span className="text-xs font-mono font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                      Not instrumented
+                    </span>
                   </div>
 
                   <div className="flex items-center justify-between text-xs font-medium">
                     <span className="text-emerald-800">Internal activity</span>
-                    <span className="text-base font-bold text-slate-900">Active</span>
+                    <span className="text-sm font-bold text-slate-900">
+                      {taskStatus === 'PROCESSING' ? 'Processing' : (agentResult ? 'Active (Task Logged)' : 'Idle')}
+                    </span>
                   </div>
                 </div>
               </div>
 
-              <p className="text-[11px] text-emerald-700 mt-6 pt-3 border-t border-slate-100 font-medium">
-                Demo values must be labeled as simulated.
+              <p className="text-[11px] text-slate-500 mt-6 pt-3 border-t border-slate-100 font-medium">
+                Network telemetry is not instrumented on this node. External egress is blocked by local-only architectural policy.
               </p>
             </div>
           </div>
@@ -1318,7 +2604,15 @@ export default function App() {
 
           <div className="pt-2">
             <p className="text-sm font-bold text-emerald-950">
-              Current task: HIGH → human approval required
+              {agentResult ? (
+                (() => {
+                  const rLevel = agentResult.risk?.risk_level || agentResult.audit_record?.risk_assessment?.risk_level || 'LOW';
+                  const hStatus = agentResult.human_gate?.human_gate_status || agentResult.audit_record?.human_gate?.human_gate_status || 'NOT_REQUIRED';
+                  return `Current task: ${rLevel} → ${hStatus === 'NOT_REQUIRED' ? 'autonomous execution (no human gate)' : 'human approval required'}`;
+                })()
+              ) : (
+                'No active task evaluated. Initiate a task to assess operational risk.'
+              )}
             </p>
           </div>
         </div>
@@ -1392,35 +2686,93 @@ export default function App() {
       {/* ------------------------------------------------------------- */}
       {/* 19. WEB 19 — CAPABILITIES                                     */}
       {/* ------------------------------------------------------------- */}
-      {screen === 'capabilities' && (
-        <div className="w-full max-w-3xl animate-in fade-in duration-200 space-y-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">CAPABILITY FABRIC</span>
-              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Capabilities</h1>
-              <p className="text-slate-600 text-sm mt-1">Controlled organizational tools available to agents.</p>
-            </div>
-            <button
-              onClick={() => setScreen('command_center')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
-          </div>
+      {screen === 'capabilities' && (() => {
+        const models = modelRegistryData?.models || [];
+        const isOllamaConnected = !!modelRegistryData?.ollama_connected;
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {capabilitiesList.map((tool, idx) => (
-              <div
-                key={idx}
-                className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
-              >
-                <span className="text-sm font-bold text-slate-900">{tool.title}</span>
-                <span className="text-xs font-medium text-emerald-700">{tool.status}</span>
+        const reasoningModel = models.find((m) => m.role?.includes('reasoning') || m.name?.includes('qwen3:4b'));
+        const visionModel = models.find((m) => m.role?.includes('vision') || m.name?.includes('vl'));
+        const codingModel = models.find((m) => m.role?.includes('coding') || m.name?.includes('coder'));
+
+        const getModelCapabilityStatus = (modelItem) => {
+          if (modelRegistryLoading) return { status: 'Checking...', color: 'text-slate-500' };
+          if (!modelRegistryData) return { status: 'Not available', color: 'text-slate-500' };
+          if (!isOllamaConnected) return { status: 'Unavailable (Ollama Offline)', color: 'text-rose-700' };
+          if (!modelItem) return { status: 'Not detected', color: 'text-amber-700' };
+          return modelItem.available
+            ? { status: 'Available', color: 'text-emerald-700' }
+            : { status: modelItem.installed ? 'Installed (Offline)' : 'Not Installed', color: 'text-rose-700' };
+        };
+
+        const reasoningStatus = getModelCapabilityStatus(reasoningModel);
+        const visionStatus = getModelCapabilityStatus(visionModel);
+        const codingStatus = getModelCapabilityStatus(codingModel);
+
+        const capabilitiesData = [
+          { title: 'Private RAG Search (ChromaDB)', category: 'Knowledge', status: 'Available', color: 'text-emerald-700' },
+          { title: 'Local Document OCR & Extraction', category: 'Ingestion', status: 'Available', color: 'text-emerald-700' },
+          {
+            title: `Sovereign Reasoning (${reasoningModel?.name || 'Local LLM'})`,
+            category: 'Reasoning',
+            status: reasoningStatus.status,
+            color: reasoningStatus.color,
+          },
+          {
+            title: `Multimodal Vision (${visionModel?.name || 'Local Vision'})`,
+            category: 'Vision',
+            status: visionStatus.status,
+            color: visionStatus.color,
+          },
+          {
+            title: `Code Generation & Review (${codingModel?.name || 'Local Coder'})`,
+            category: 'Coding',
+            status: codingStatus.status,
+            color: codingStatus.color,
+          },
+          { title: 'Controlled Deliverable Generator (.docx)', category: 'Delivery', status: 'Available', color: 'text-emerald-700' },
+          { title: 'Engineering Verification Engine', category: 'Validation', status: 'Available', color: 'text-emerald-700' },
+          { title: 'Human Governance Gate (RBAC)', category: 'Governance', status: 'Available', color: 'text-emerald-700' },
+          { title: 'Spreadsheet Calculation', category: 'Data', status: 'Not instrumented', color: 'text-slate-500' },
+          { title: 'External Cloud APIs', category: 'Network', status: 'Blocked by Policy', color: 'text-rose-700' },
+        ];
+
+        return (
+          <div className="w-full max-w-3xl animate-in fade-in duration-200 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">CAPABILITY FABRIC</span>
+                <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Capabilities</h1>
+                <p className="text-slate-600 text-sm mt-1">Controlled organizational tools available to agents.</p>
               </div>
-            ))}
+              <button
+                onClick={() => setScreen('command_center')}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {capabilitiesData.map((tool, idx) => (
+                <div
+                  key={idx}
+                  className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
+                >
+                  <div>
+                    <span className="text-sm font-bold text-slate-900 block">{tool.title}</span>
+                    <span className="text-[10px] uppercase font-bold text-slate-400">{tool.category}</span>
+                  </div>
+                  <span className={`text-xs font-semibold ${tool.color}`}>{tool.status}</span>
+                </div>
+              ))}
+            </div>
+
+            <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-100 font-medium">
+              Agent tools execute deterministically on-premise. Cloud API endpoints are disabled by policy.
+            </p>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ------------------------------------------------------------- */}
       {/* 20. WEB 20 — MODEL REGISTRY                                   */}
@@ -1431,7 +2783,7 @@ export default function App() {
             <div>
               <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">MODEL FABRIC</span>
               <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Model registry</h1>
-              <p className="text-slate-600 text-sm mt-1">Registered local open-weight models.</p>
+              <p className="text-slate-600 text-sm mt-1">Verified on-premise local open-weight models.</p>
             </div>
             <button
               onClick={() => setScreen('command_center')}
@@ -1441,34 +2793,121 @@ export default function App() {
             </button>
           </div>
 
-          <div className="space-y-3">
-            {modelsList.map((mod, idx) => (
-              <div
-                key={idx}
-                className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
-              >
-                <span className="text-sm font-bold text-slate-900">{mod.name}</span>
-                <div className="flex items-center gap-8">
-                  <span className="text-xs font-medium text-emerald-700">{mod.category}</span>
-                  <span className="text-xs font-medium text-emerald-700">{mod.status}</span>
-                </div>
+          {/* Model Fabric Daemon Status Card */}
+          <div className="bg-white/95 rounded-2xl p-4 shadow-sm border border-emerald-100/80 space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">OLLAMA DAEMON</span>
+                <span className={`font-semibold flex items-center gap-1 mt-0.5 ${
+                  modelRegistryData?.ollama_connected ? 'text-emerald-700' : 'text-rose-700'
+                }`}>
+                  {modelRegistryLoading ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : modelRegistryData?.ollama_connected ? (
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                  ) : (
+                    <AlertCircle className="w-3.5 h-3.5" />
+                  )}
+                  {modelRegistryLoading
+                    ? 'Probing daemon...'
+                    : modelRegistryData?.ollama_connected
+                    ? 'Connected (127.0.0.1:11434)'
+                    : 'Unreachable'}
+                </span>
               </div>
-            ))}
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">ARCHITECTURE</span>
+                <span className="font-semibold text-slate-800 mt-0.5 block">Air-gapped / Local Only</span>
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">CLOUD FALLBACK</span>
+                <span className="font-semibold text-emerald-700 mt-0.5 block">Disabled</span>
+              </div>
+            </div>
           </div>
 
-          <div className="flex justify-end pt-2">
+          {/* Model Registry Cards List */}
+          {modelRegistryError && (
+            <div className="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+              <span>Daemon Error: {modelRegistryError}</span>
+            </div>
+          )}
+
+          <div className="space-y-3">
+            {/* Real Ollama Models from GET /api/v1/models/status */}
+            {modelRegistryLoading && !modelRegistryData && (
+              <div className="bg-white/95 rounded-2xl p-6 text-center text-xs text-slate-500 flex items-center justify-center gap-2 border border-emerald-100/80">
+                <Loader2 className="w-4 h-4 animate-spin text-emerald-700" />
+                <span>Querying local Ollama model registry...</span>
+              </div>
+            )}
+
+            {modelRegistryData?.models && modelRegistryData.models.length > 0 ? (
+              modelRegistryData.models.map((mod, idx) => {
+                const isAvailable = mod.available && modelRegistryData?.ollama_connected;
+                return (
+                  <div
+                    key={idx}
+                    className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between"
+                  >
+                    <div>
+                      <span className="text-sm font-bold font-mono text-slate-900 block">{mod.name}</span>
+                      <span className="text-xs text-slate-500 font-medium">{mod.role}</span>
+                    </div>
+                    <span
+                      className={`text-xs font-bold px-3 py-1 rounded-full border ${
+                        isAvailable
+                          ? 'text-emerald-700 bg-emerald-50 border-emerald-300'
+                          : 'text-rose-700 bg-rose-50 border-rose-200'
+                      }`}
+                    >
+                      {isAvailable
+                        ? 'Ready (Local)'
+                        : !modelRegistryData.ollama_connected
+                        ? 'Unavailable (Daemon Unreachable)'
+                        : mod.installed
+                        ? 'Installed (Offline)'
+                        : 'Not Installed'}
+                    </span>
+                  </div>
+                );
+              })
+            ) : !modelRegistryLoading && (
+              <div className="bg-white/95 rounded-2xl p-6 text-center text-xs text-slate-500 border border-slate-200">
+                No model registry data available from local daemon.
+              </div>
+            )}
+
+            {/* Local In-Process Embedding Model */}
+            <div className="bg-white/95 rounded-2xl px-6 py-4 shadow-sm border border-emerald-100/80 flex items-center justify-between">
+              <div>
+                <span className="text-sm font-bold font-mono text-slate-900 block">all-MiniLM-L6-v2</span>
+                <span className="text-xs text-slate-500 font-medium">retrieval / private_embeddings (In-process PyTorch)</span>
+              </div>
+              <span className="text-xs font-bold px-3 py-1 rounded-full border text-emerald-700 bg-emerald-50 border-emerald-300">
+                Active (In-process PyTorch)
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <span className="text-xs text-slate-500">
+              Host: <span className="font-mono text-slate-700">127.0.0.1:11434</span> (Air-gap boundary)
+            </span>
             <button
-              onClick={() => {
-                const name = prompt('Enter new local model identifier:');
-                if (name) {
-                  setModelsList([...modelsList, { name, category: 'General', status: 'Available' }]);
-                }
-              }}
-              className="py-3 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-md shadow-emerald-800/20 transition flex items-center gap-2"
+              onClick={fetchModelStatus}
+              disabled={modelRegistryLoading}
+              className="py-2.5 px-5 rounded-2xl font-semibold text-white text-xs bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 shadow-sm transition flex items-center gap-1.5"
             >
-              <Plus className="w-4 h-4" /> Register model
+              <RefreshCw className={`w-3.5 h-3.5 ${modelRegistryLoading ? 'animate-spin' : ''}`} />
+              Refresh status
             </button>
           </div>
+
+          <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-100 font-medium">
+            Models are loaded from local Ollama storage and configured in sovereign_ai/config/models.json. Cloud API egress is blocked by policy.
+          </p>
         </div>
       )}
 
@@ -1507,9 +2946,56 @@ export default function App() {
           </div>
 
           <div className="space-y-3">
-            {operationsList
-              .filter((op) => op.category === operationFilter)
-              .map((op, idx) => (
+            {(() => {
+              const currentOps = [];
+              if (taskStatus === 'PROCESSING') {
+                currentOps.push({
+                  title: taskPrompt || 'Active Task Execution',
+                  status: 'Running',
+                  color: 'text-emerald-700 font-semibold',
+                  category: 'Processing',
+                });
+              } else if (agentResult) {
+                const hGate = agentResult.human_gate?.human_gate_status;
+                const dStatus = agentResult.delivery?.delivery_status;
+                if (hGate === 'PENDING') {
+                  currentOps.push({
+                    title: taskPrompt || 'Inspection Report → Review Note',
+                    status: 'Needs review',
+                    color: 'text-amber-800 font-semibold',
+                    category: 'Pending',
+                  });
+                } else if (hGate === 'REJECTED') {
+                  currentOps.push({
+                    title: taskPrompt || 'Inspection Report → Review Note',
+                    status: 'Rejected / Blocked',
+                    color: 'text-rose-700 font-bold',
+                    category: 'Blocked',
+                  });
+                } else if (dStatus === 'DELIVERED') {
+                  currentOps.push({
+                    title: taskPrompt || 'Inspection Report → Deliverable Note',
+                    status: 'Completed',
+                    color: 'text-emerald-700 font-semibold',
+                    category: 'Completed',
+                  });
+                }
+              }
+
+              const filtered = currentOps.filter((op) => op.category === operationFilter);
+
+              if (filtered.length === 0) {
+                return (
+                  <div className="bg-white/95 rounded-2xl p-6 shadow-sm border border-emerald-100/80 text-center space-y-2">
+                    <p className="text-xs font-semibold text-slate-700">No active operations in {operationFilter} queue</p>
+                    <p className="text-[11px] text-slate-500">
+                      Operations reflect real agent runtime state. Initiate tasks from the Command Center to populate this queue.
+                    </p>
+                  </div>
+                );
+              }
+
+              return filtered.map((op, idx) => (
                 <div
                   key={idx}
                   onClick={() => setScreen('execution')}
@@ -1518,8 +3004,13 @@ export default function App() {
                   <span className="text-sm font-bold text-slate-900">{op.title}</span>
                   <span className={`text-xs ${op.color}`}>{op.status}</span>
                 </div>
-              ))}
+              ));
+            })()}
           </div>
+
+          <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-100 font-medium">
+            Historical task records are stored on-premise in TASKS_DIR. Multi-task queue listing API is not instrumented on this node.
+          </p>
         </div>
       )}
 
