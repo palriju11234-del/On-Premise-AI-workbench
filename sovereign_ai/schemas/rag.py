@@ -21,6 +21,7 @@ class IngestDocumentResponse(BaseModel):
 class QueryRequest(BaseModel):
     query: str
     top_k: int = 3
+    environment: Optional[str] = "production"
 
 
 class RetrievedChunk(BaseModel):
@@ -35,3 +36,16 @@ class QueryResponse(BaseModel):
     query: str
     results_count: int
     results: List[RetrievedChunk]
+
+
+class MaintenanceCleanupRequest(BaseModel):
+    confirm: bool = False
+    purge_all_non_prod: bool = True
+
+
+class MaintenanceCleanupResponse(BaseModel):
+    status: str
+    purged_count: int
+    purged_ids: List[str]
+    remaining_count: int
+    environment_breakdown: Dict[str, int]

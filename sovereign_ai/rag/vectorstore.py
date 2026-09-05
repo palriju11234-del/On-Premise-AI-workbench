@@ -35,6 +35,10 @@ class LocalVectorStore:
         self.embedding_model = self._load_embedding_model()
         self._initialized = True
 
+        # Default knowledge seeding happens only at initialization and only when collection is genuinely empty
+        if self.collection.count() == 0:
+            self._seed_default_knowledge()
+
     def _load_embedding_model(self) -> SentenceTransformer:
         """Loads local cached model for strict air-gap/on-premise execution."""
         hf_snapshots = (
@@ -62,37 +66,46 @@ class LocalVectorStore:
 
         return SentenceTransformer("all-MiniLM-L6-v2")
 
-        # Auto-seed knowledge if collection is currently empty
-        if self.collection.count() == 0:
-            self._seed_default_knowledge()
-
     def _seed_default_knowledge(self):
-        """Seeds default documents from data/knowledge if available."""
+        """Seeds default documents from DATA_DIR/knowledge if available."""
         knowledge_dir = DATA_DIR / "knowledge"
         if not knowledge_dir.exists():
             return
 
         documents = []
-        for file in knowledge_dir.glob("*.txt"):
+        for file in sorted(knowledge_dir.glob("*.txt")):
             try:
                 text = file.read_text(encoding="utf-8").strip()
                 if text:
+                    stem_id = file.stem.lower().replace("_", "-")
+                    doc_id = f"{stem_id}-001"
+                    normalized_text = " ".join(text.split())
+                    chunk_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()[:8]
                     documents.append({
-                        "document_id": file.stem,
+                        "chunk_id": f"{doc_id}_chunk_0_{chunk_hash}",
+                        "document_id": doc_id,
                         "filename": file.name,
-                        "text": text,
-                        "classification": "INTERNAL",
-                        "metadata": {"source": "default_seed"},
+                        "text": normalized_text,
+                        "classification": "GENERAL",
+                        "metadata": {
+                            "source": file.name,
+                            "department": "maintenance",
+                            "environment": "production",
+                        },
                     })
             except Exception:
                 pass
 
         if documents:
-            self.add_documents(documents)
+            self.add_documents(documents, default_environment="production")
 
-    def add_documents(self, documents: List[Dict[str, Any]]):
+    def add_documents(
+        self,
+        documents: List[Dict[str, Any]],
+        default_environment: str = "production",
+    ):
         """
-        Ingests document chunks into ChromaDB with collision-safe upsert.
+        Ingests document chunks into ChromaDB with collision-safe upsert and environment tagging.
         """
         if not documents:
             return
@@ -107,26 +120,30 @@ class LocalVectorStore:
                 continue
 
             # Deterministic unique ID to prevent collisions during repeated ingestion
-            chunk_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+            chunk_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()[:8]
             doc_id = (
                 d.get("chunk_id")
                 or d.get("id")
-                or f"{d.get('document_id', 'doc')}_{idx}_{chunk_hash}"
+                or f"{d.get('document_id', 'doc')}_chunk_{idx}_{chunk_hash}"
             )
+
 
             classification = d.get("classification", "GENERAL")
             if hasattr(classification, "value"):
                 classification = classification.value
 
+            extra_meta = d.get("metadata") or {}
+            env = extra_meta.get("environment", default_environment)
+
             meta = {
                 "document_id": str(d.get("document_id", "")),
                 "filename": str(d.get("filename", "")),
                 "classification": str(classification),
+                "environment": str(env),
             }
-            # Add any additional user metadata
-            extra_meta = d.get("metadata") or {}
+            # Add any additional user metadata (primitives only)
             for k, v in extra_meta.items():
-                if isinstance(v, (str, int, float, bool)):
+                if k not in meta and isinstance(v, (str, int, float, bool)):
                     meta[k] = v
 
             ids.append(doc_id)
@@ -150,17 +167,19 @@ class LocalVectorStore:
         query: str,
         top_k: int = 3,
         allowed_clearances: Optional[Set[DataClassification]] = None,
+        environment: Optional[str] = "production",
     ) -> List[RetrievedChunk]:
         """
-        Performs semantic vector retrieval filtered strictly by role-based clearances.
+        Performs semantic vector retrieval filtered strictly by role-based clearances
+        and environment isolation (default: production).
         """
         if self.collection.count() == 0:
             return []
 
         query_embedding = self.embedding_model.encode([query]).tolist()
 
-        # Query more candidates to allow clearance filtering
-        n_results = min(max(top_k * 4, 10), self.collection.count())
+        # Query candidates to evaluate clearances and environment tags
+        n_results = min(max(top_k * 5, 25), self.collection.count())
 
         res = self.collection.query(
             query_embeddings=query_embedding,
@@ -175,7 +194,14 @@ class LocalVectorStore:
         distances = res.get("distances", [[]])[0]
 
         for chunk_id, text, meta, dist in zip(ids, docs, metas, distances):
-            meta = meta or {}
+            # Skip corrupt or missing metadata
+            if not meta:
+                continue
+
+            # Environment isolation filter
+            if environment is not None and meta.get("environment") != environment:
+                continue
+
             classification_str = meta.get("classification", "GENERAL")
             try:
                 classification = DataClassification(classification_str)
@@ -208,3 +234,109 @@ class LocalVectorStore:
         """Compatibility method returning plain text results."""
         chunks = self.search(query=query, top_k=top_k)
         return [c.text for c in chunks]
+
+    def get_collection_stats(self) -> Dict[str, Any]:
+        """Returns statistics on stored documents broken down by environment and classification."""
+        total = self.collection.count()
+        if total == 0:
+            return {"total_count": 0, "environments": {}, "documents": []}
+
+        res = self.collection.get(include=["metadatas"])
+        ids = res.get("ids", [])
+        metas = res.get("metadatas", [])
+
+        breakdown: Dict[str, int] = {}
+        doc_details = []
+
+        for cid, meta in zip(ids, metas):
+            if meta is None:
+                env = "unclassified_legacy"
+                classif = "UNKNOWN"
+            else:
+                env = meta.get("environment", "unclassified")
+                classif = meta.get("classification", "GENERAL")
+
+            breakdown[env] = breakdown.get(env, 0) + 1
+            doc_details.append({
+                "id": cid,
+                "environment": env,
+                "classification": classif,
+                "document_id": meta.get("document_id") if meta else None,
+                "filename": meta.get("filename") if meta else None,
+            })
+
+        return {
+            "total_count": total,
+            "environments": breakdown,
+            "documents": doc_details,
+        }
+
+    def purge_test_and_stale_data(
+        self,
+        confirm: bool = False,
+        purge_all_non_prod: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Safely purges non-production documents (test fixtures, corrupt legacy records with None metadata,
+        or items explicitly marked environment != 'production').
+        Requires confirm=True to execute.
+        NEVER deletes documents marked with environment == 'production'.
+        """
+        if not confirm:
+            return {
+                "status": "error",
+                "message": "Explicit confirmation required (confirm=True). Safe maintenance aborted.",
+                "purged_count": 0,
+                "purged_ids": [],
+                "remaining_count": self.collection.count(),
+                "environment_breakdown": {},
+            }
+
+        total = self.collection.count()
+        if total == 0:
+            return {
+                "status": "success",
+                "purged_count": 0,
+                "purged_ids": [],
+                "remaining_count": 0,
+                "environment_breakdown": {},
+            }
+
+        res = self.collection.get(include=["metadatas"])
+        ids = res.get("ids", [])
+        metas = res.get("metadatas", [])
+
+        candidate_ids = []
+        for cid, meta in zip(ids, metas):
+            # 1. Corrupt or un-indexed legacy record
+            if meta is None:
+                candidate_ids.append(cid)
+                continue
+
+            env = meta.get("environment")
+
+            # 2. NEVER delete production knowledge
+            if env == "production":
+                continue
+
+            # 3. Explicit test fixtures
+            if env == "test":
+                candidate_ids.append(cid)
+                continue
+
+            # 4. If purge_all_non_prod is enabled, purge any record not marked as production
+            if purge_all_non_prod:
+                candidate_ids.append(cid)
+
+        if candidate_ids:
+            self.collection.delete(ids=candidate_ids)
+
+        stats = self.get_collection_stats()
+
+        return {
+            "status": "success",
+            "purged_count": len(candidate_ids),
+            "purged_ids": candidate_ids,
+            "remaining_count": stats["total_count"],
+            "environment_breakdown": stats["environments"],
+        }
