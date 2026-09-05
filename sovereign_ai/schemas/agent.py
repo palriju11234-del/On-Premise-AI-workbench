@@ -26,3 +26,23 @@ class AgentTaskResponse(BaseModel):
     risk: Optional[Dict[str, Any]] = None
     human_gate: Optional[Dict[str, Any]] = None
     delivery: Optional[Dict[str, Any]] = None
+    task_id: Optional[str] = None
+    deliverable: Optional[Dict[str, Any]] = None
+
+
+class ApprovalActionRequest(BaseModel):
+    comment: Optional[str] = None
+
+
+class EditActionRequest(BaseModel):
+    edit_instructions: str
+    feedback: Optional[str] = None
+
+
+class HumanGateActionResponse(BaseModel):
+    status: str
+    task_id: str
+    human_gate: Dict[str, Any]
+    delivery: Optional[Dict[str, Any]] = None
+    deliverable: Optional[Dict[str, Any]] = None
+    message: str

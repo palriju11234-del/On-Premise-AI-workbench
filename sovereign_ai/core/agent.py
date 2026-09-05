@@ -4,6 +4,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List
+import uuid
 
 import ollama
 
@@ -13,6 +14,7 @@ from .security import SecurityEngine
 from .provenance import Provenance
 from sovereign_ai.core.logger import logger, SovereignException
 from sovereign_ai.services.rag_service import RAGService
+from sovereign_ai.services.deliverable_service import ControlledDeliverableService
 from sovereign_ai.schemas.security import UserRole, DataClassification
 
 
@@ -115,6 +117,7 @@ class SovereignAgent:
         self.verifier = Verifier()
         self.provenance = Provenance()
         self.knowledge_store = knowledge_store
+        self.deliverable_service = ControlledDeliverableService()
 
     def run(
         self,
@@ -123,9 +126,11 @@ class SovereignAgent:
         filename: str = "inspection_report.pdf",
         user_role: UserRole = UserRole.ENGINEER,
         image: Optional[str] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         stages: List[Dict[str, Any]] = []
         events: List[str] = []
+        task_id = task_id or f"task_{uuid.uuid4().hex[:12]}"
 
         def record_stage(
             stage_name: str,
@@ -151,6 +156,7 @@ class SovereignAgent:
                 task=task,
                 details=details,
                 error=error,
+                task_id=task_id,
             )
 
         current_stage = "UNDERSTAND"
@@ -447,12 +453,36 @@ Produce:
             # 11. STAGE: DELIVER
             # -------------------------------------------------------------
             current_stage = "DELIVER"
+            deliverable_meta = None
             if human_gate_status == "PENDING":
                 delivery_status = "PENDING_APPROVAL"
-                delivery_message = "Analysis and recommendations generated. Operational execution is held pending authorized human sign-off."
+                delivery_message = "Analysis and recommendations generated. Controlled deliverable and operational execution held pending authorized human sign-off."
             elif human_gate_status == "NOT_REQUIRED":
                 delivery_status = "DELIVERED"
-                delivery_message = "Deliverable verified and delivered."
+                delivery_message = "Deliverable verified, generated, and delivered."
+                # Controlled Deliverable generation for low-risk work
+                temp_task_record = {
+                    "task_id": task_id,
+                    "task": task,
+                    "filename": filename,
+                    "security": security,
+                    "model": routing_info,
+                    "answer": answer,
+                    "verification": verification,
+                    "risk": risk_details,
+                    "human_gate": gate_details,
+                    "retrieved_knowledge": retrieved_sources,
+                    "stages": stages,
+                    "audit_record": {
+                        "filename": filename,
+                        "input_sha256": hashlib.sha256((task + (document_text or "")).encode("utf-8")).hexdigest(),
+                        "model": model_name,
+                    },
+                }
+                deliverable_meta = self.deliverable_service.generate_deliverable(
+                    task_record=temp_task_record,
+                    caller_user=None,
+                )
             else:
                 delivery_status = human_gate_status
                 delivery_message = f"Delivery state: {human_gate_status}"
@@ -460,6 +490,8 @@ Produce:
             deliver_details = {
                 "delivery_status": delivery_status,
                 "delivery_message": delivery_message,
+                "task_id": task_id,
+                "deliverable": deliverable_meta,
                 "summary": f"Delivery status: '{delivery_status}'",
             }
             record_stage("DELIVER", "COMPLETED", deliver_details)
@@ -469,6 +501,7 @@ Produce:
             # -------------------------------------------------------------
             input_hash = hashlib.sha256((task + (document_text or "")).encode("utf-8")).hexdigest()
             output_hash = hashlib.sha256(answer.encode("utf-8")).hexdigest()
+            output_docx_hash = deliverable_meta.get("sha256") if deliverable_meta else None
 
             audit_record = self.provenance.create_record(
                 task=task,
@@ -483,9 +516,12 @@ Produce:
                 human_gate=gate_details,
                 delivery_status=delivery_status,
                 stages=stages,
+                task_id=task_id,
+                output_docx_sha256=output_docx_hash,
             )
 
-            return {
+            result_payload = {
+                "task_id": task_id,
                 "answer": answer,
                 "security": security,
                 "model": routing_info,
@@ -502,7 +538,13 @@ Produce:
                 "risk": risk_details,
                 "human_gate": gate_details,
                 "delivery": deliver_details,
+                "deliverable": deliverable_meta,
             }
+
+            # Persist task state to local storage (survives restart)
+            self.deliverable_service.save_task_state(task_id, result_payload)
+
+            return result_payload
 
         except Exception as e:
             # Failure handling: fail-closed, record failed stage, audit failure
