@@ -32,4 +32,11 @@ def execute_agent_task(
         events=result["events"],
         retrieved_sources=result["retrieved_sources"],
         audit_record=result["audit_record"],
+        stages=result.get("stages"),
+        plan=result.get("plan"),
+        action=result.get("action"),
+        observation=result.get("observation"),
+        risk=result.get("risk"),
+        human_gate=result.get("human_gate"),
+        delivery=result.get("delivery"),
     )

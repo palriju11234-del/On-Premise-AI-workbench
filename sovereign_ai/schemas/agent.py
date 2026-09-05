@@ -19,3 +19,10 @@ class AgentTaskResponse(BaseModel):
     events: List[str]
     retrieved_sources: int
     audit_record: Dict[str, Any]
+    stages: Optional[List[Dict[str, Any]]] = None
+    plan: Optional[Dict[str, Any]] = None
+    action: Optional[Dict[str, Any]] = None
+    observation: Optional[Dict[str, Any]] = None
+    risk: Optional[Dict[str, Any]] = None
+    human_gate: Optional[Dict[str, Any]] = None
+    delivery: Optional[Dict[str, Any]] = None
