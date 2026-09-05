@@ -9,7 +9,6 @@
                 "summarization"
             ]
         },
-
         "vision": {
             "name": "qwen3-vl:2b",
             "capabilities": [
@@ -19,7 +18,6 @@
                 "image_analysis"
             ]
         },
-
         "coding": {
             "name": "qwen2.5-coder:3b",
             "capabilities": [
@@ -28,6 +26,15 @@
                 "code_review",
                 "code_debugging",
                 "code_reasoning"
+            ]
+        },
+        "confidential_airgap": {
+            "name": "qwen3:4b",
+            "capabilities": [
+                "confidential",
+                "airgap",
+                "secure_reasoning",
+                "compliance"
             ]
         }
     }

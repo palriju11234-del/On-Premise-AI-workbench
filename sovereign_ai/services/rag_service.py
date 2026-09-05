@@ -1,14 +1,22 @@
-from typing import List, Dict, Any
-from sovereign_ai.schemas.security import UserRole
+import hashlib
+from typing import List
+from sovereign_ai.schemas.security import UserRole, DataClassification
 from sovereign_ai.schemas.rag import (
     IngestDocumentRequest,
     IngestDocumentResponse,
     QueryResponse,
 )
-from sovereign_ai.rag.retriever import SovereignRetriever
+from sovereign_ai.core.policy import ROLE_CLEARANCE
+from sovereign_ai.rag.vectorstore import LocalVectorStore
 
-# Local in-memory vector/index store
-INDEX_STORE: List[Dict[str, Any]] = []
+_vector_store = None
+
+
+def get_vector_store() -> LocalVectorStore:
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = LocalVectorStore()
+    return _vector_store
 
 
 class RAGService:
@@ -26,16 +34,28 @@ class RAGService:
     @classmethod
     def ingest_document(cls, req: IngestDocumentRequest) -> IngestDocumentResponse:
         chunks = cls.chunk_text(req.text)
+        docs_to_index = []
+
+        classification_val = (
+            req.classification.value
+            if hasattr(req.classification, "value")
+            else str(req.classification)
+        )
+
         for idx, chunk_text in enumerate(chunks):
+            chunk_hash = hashlib.sha256(chunk_text.encode("utf-8")).hexdigest()[:8]
             chunk_entry = {
-                "chunk_id": f"{req.document_id}_chunk_{idx}",
+                "chunk_id": f"{req.document_id}_chunk_{idx}_{chunk_hash}",
                 "document_id": req.document_id,
                 "filename": req.filename,
                 "text": chunk_text,
-                "classification": req.classification,
+                "classification": classification_val,
                 "metadata": req.metadata or {},
             }
-            INDEX_STORE.append(chunk_entry)
+            docs_to_index.append(chunk_entry)
+
+        store = get_vector_store()
+        store.add_documents(docs_to_index)
 
         return IngestDocumentResponse(
             status="indexed",
@@ -46,9 +66,16 @@ class RAGService:
 
     @classmethod
     def retrieve(cls, query: str, user_role: UserRole, top_k: int = 3) -> QueryResponse:
-        return SovereignRetriever.retrieve(
+        allowed_clearances = ROLE_CLEARANCE.get(user_role, {DataClassification.GENERAL})
+        store = get_vector_store()
+        results = store.search(
             query=query,
-            user_role=user_role,
-            index_store=INDEX_STORE,
             top_k=top_k,
+            allowed_clearances=allowed_clearances,
+        )
+
+        return QueryResponse(
+            query=query,
+            results_count=len(results),
+            results=results,
         )

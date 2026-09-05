@@ -3,7 +3,6 @@ from sovereign_ai.schemas.security import UserRole, UserContext
 
 
 class SecurityEngine:
-
     def classify(self, filename: str, text: str):
         sensitive_keywords = [
             "confidential",
@@ -13,14 +12,15 @@ class SecurityEngine:
             "equipment",
             "vendor",
             "plant",
-            "refinery"
+            "refinery",
         ]
 
         score = 0
-        text_lower = text.lower()
+        text_lower = (text or "").lower()
+        fn_lower = (filename or "").lower()
 
         for keyword in sensitive_keywords:
-            if keyword in text_lower:
+            if keyword in text_lower or keyword in fn_lower:
                 score += 1
 
         if score >= 2:
@@ -33,28 +33,28 @@ class SecurityEngine:
         return {
             "classification": classification,
             "score": score,
-            "policy": self.get_policy(classification)
+            "policy": self.get_policy(classification),
         }
 
-    def get_policy(self, classification):
+    def get_policy(self, classification: str):
         policies = {
             "GENERAL": {
                 "allow_local_processing": True,
                 "external_api": False,
-                "human_review": False
+                "human_review": False,
             },
             "INTERNAL": {
                 "allow_local_processing": True,
                 "external_api": False,
-                "human_review": False
+                "human_review": False,
             },
             "CONFIDENTIAL": {
                 "allow_local_processing": True,
                 "external_api": False,
-                "human_review": True
-            }
+                "human_review": True,
+            },
         }
-        return policies[classification]
+        return policies.get(classification, policies["GENERAL"])
 
 
 # Pre-configured enterprise mock identities
@@ -70,14 +70,18 @@ def get_current_user(authorization: str = Header(None)) -> UserContext:
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Missing Authorization header"
+            detail="Missing Authorization header",
         )
 
-    token = authorization.replace("Bearer ", "").strip()
+    # Robust parsing of Bearer prefix (case-insensitive and extra whitespace)
+    token = authorization.strip()
+    if token.lower().startswith("bearer "):
+        token = token[7:].strip()
+
     user = MOCK_USERS.get(token)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired credentials"
+            detail="Invalid or expired credentials",
         )
     return user

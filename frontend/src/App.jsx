@@ -47,8 +47,15 @@ export default function App() {
       const response = await workbenchApi.uploadDocument(role, file);
       console.log('Upload response:', response.data);
       setAttachedFileName(file.name);
-      if (response.data?.text || response.data?.text_preview) {
-        setDocContext(response.data.text || response.data.text_preview);
+      const parsedText =
+        response.data?.extracted_text ||
+        response.data?.text ||
+        response.data?.text_preview ||
+        response.data?.content ||
+        '';
+
+      if (parsedText) {
+        setDocContext(parsedText);
       }
       alert('Document uploaded and processed successfully!');
     } catch (error) {

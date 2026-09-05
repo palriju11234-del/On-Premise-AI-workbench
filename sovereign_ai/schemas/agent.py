@@ -6,6 +6,7 @@ class AgentTaskRequest(BaseModel):
     task: str
     document_text: str
     filename: Optional[str] = "inspection_report.pdf"
+    image: Optional[str] = None
 
 
 class AgentTaskResponse(BaseModel):

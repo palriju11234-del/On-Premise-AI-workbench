@@ -1,37 +1,97 @@
+import base64
 import hashlib
 import logging
-from typing import Dict, Any
+from pathlib import Path
+from typing import Dict, Any, Optional, List
+
+import ollama
 
 from .model_router import ModelRouter
 from .verifier import Verifier
 from .security import SecurityEngine
 from .provenance import Provenance
+from sovereign_ai.core.logger import logger, SovereignException
 from sovereign_ai.services.rag_service import RAGService
 from sovereign_ai.schemas.security import UserRole, DataClassification
 
-logger = logging.getLogger("sovereign_ai")
-
 
 class LocalLLM:
-    def generate(self, model: str, prompt: str) -> str:
-        """Invokes local Ollama if available, with a deterministic local fallback."""
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        images: Optional[List[str]] = None,
+        temperature: float = 0.7,
+    ) -> str:
+        """
+        Invokes local Ollama for inference with strict error handling.
+        Never fabricates responses or uses mock fallbacks.
+        """
+        formatted_images: Optional[List[str]] = None
+        if images:
+            formatted_images = []
+            for img in images:
+                if not img:
+                    continue
+                img_path = Path(img)
+                if img_path.exists() and img_path.is_file():
+                    try:
+                        b64 = base64.b64encode(img_path.read_bytes()).decode("utf-8")
+                        formatted_images.append(b64)
+                    except Exception as e:
+                        raise SovereignException(
+                            f"Failed to read image file '{img}': {str(e)}",
+                            status_code=400,
+                        )
+                else:
+                    raw_b64 = img
+                    if "," in raw_b64 and "base64" in raw_b64.split(",")[0]:
+                        raw_b64 = raw_b64.split(",", 1)[1]
+                    try:
+                        base64.b64decode(raw_b64)
+                        formatted_images.append(raw_b64)
+                    except Exception:
+                        raise SovereignException(
+                            "Invalid image input: expected existing file path or valid base64 string.",
+                            status_code=400,
+                        )
+
+        message: Dict[str, Any] = {"role": "user", "content": prompt}
+        if formatted_images:
+            message["images"] = formatted_images
+
         try:
-            import ollama
             response = ollama.chat(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[message],
+                options={"temperature": temperature},
             )
-            return response["message"]["content"]
+            content = response.get("message", {}).get("content", "")
+            return content
+        except ollama.ResponseError as e:
+            logger.error(f"Ollama ResponseError with model '{model}': {e}")
+            if e.status_code == 404 or "not found" in str(e).lower():
+                raise SovereignException(
+                    f"Model '{model}' is not installed or available in local Ollama.",
+                    status_code=404,
+                )
+            raise SovereignException(
+                f"Ollama inference error with model '{model}': {e.error}",
+                status_code=500,
+            )
+        except SovereignException:
+            raise
         except Exception as e:
-            logger.warning(f"Ollama daemon not reachable or model missing ({e}). Using sovereign mock inference.")
-            return (
-                f"[Sovereign Local Execution - Model: {model}]\n"
-                f"1. Key Findings: Telemetry indicates operating parameters require observation.\n"
-                f"2. Evidence: Document content reconciled against ingested standard operating procedures.\n"
-                f"3. SOP Comparison: Vibration exceeds nominal limits by calibrated tolerance delta.\n"
-                f"4. Recommended Action: Schedule preventative maintenance inspection window.\n"
-                f"5. Uncertainties: Long-term load degradation rate requires continuous logging.\n"
-                f"6. Approval Recommendation: Pending engineer verification."
+            err_str = str(e).lower()
+            logger.error(f"Ollama daemon invocation failed for model '{model}': {e}")
+            if "connection" in err_str or "connect" in err_str or "refused" in err_str:
+                raise SovereignException(
+                    "Local Ollama daemon is unreachable. Please ensure the Ollama service is running.",
+                    status_code=503,
+                )
+            raise SovereignException(
+                f"Inference execution failed on model '{model}': {str(e)}",
+                status_code=500,
             )
 
 
@@ -50,12 +110,21 @@ class SovereignAgent:
         document_text: str,
         filename: str = "inspection_report.pdf",
         user_role: UserRole = UserRole.ENGINEER,
+        image: Optional[str] = None,
     ) -> Dict[str, Any]:
         events = []
 
         # 1. Task understanding
         events.append("Understanding task")
-        task_type = "reasoning"
+        lower_fn = (filename or "").lower()
+        lower_task = (task or "").lower()
+
+        if image or lower_fn.endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff")):
+            task_type = "vision"
+        elif any(kw in lower_task for kw in ["code", "coding", "python", "debug", "script", "function", "program"]):
+            task_type = "coding"
+        else:
+            task_type = "reasoning"
 
         # 2. Security classification
         events.append("Classifying information")
@@ -73,10 +142,9 @@ class SovereignAgent:
         knowledge_chunks = [item.text for item in rag_response.results]
         context = "\n\n".join(knowledge_chunks) if knowledge_chunks else "No relevant knowledge found."
 
-        # 5. Agent reasoning
+        # 5. Agent reasoning via real local Ollama inference
         events.append("Executing agent reasoning")
-        prompt = f"""
-You are a controlled enterprise AI assistant.
+        prompt = f"""You are a controlled enterprise AI assistant.
 
 RULES:
 1. Use ONLY the supplied document and organizational knowledge.
@@ -103,7 +171,13 @@ Produce:
 5. Uncertainties
 6. Approval recommendation
 """
-        answer = self.llm.generate(model_name, prompt)
+        images_list = [image] if image else None
+        answer = self.llm.generate(
+            model=model_name,
+            prompt=prompt,
+            images=images_list,
+            temperature=routing_info.get("temperature", 0.7),
+        )
 
         # 6. Verification
         events.append("Verifying output")

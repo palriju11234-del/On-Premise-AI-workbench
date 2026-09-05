@@ -19,6 +19,7 @@ def execute_agent_task(
         document_text=payload.document_text,
         filename=payload.filename or "inspection_report.pdf",
         user_role=user.role,
+        image=payload.image,
     )
 
     return AgentTaskResponse(
