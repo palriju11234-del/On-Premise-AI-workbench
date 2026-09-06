@@ -228,3 +228,14 @@ data/vector_db/
 sovereign_ai/data/vector_db/
 sovereign_ai/data/tasks/
 sovereign_ai/data/deliverables/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# ChromaDB local storage
+sovereign_ai/data/vector_db/
+
+# Runtime logs & test files
+sovereign_ai/audit/*.jsonl
+*.pdf
