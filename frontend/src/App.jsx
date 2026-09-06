@@ -3,18 +3,18 @@ import {
   ArrowRight, Plus, FileText, Search, Edit3,
   Calculator, CheckCircle2, ShieldCheck, Loader2, AlertCircle,
   Check, Circle, ArrowLeft, Shield, CheckCheck, FileDown, ExternalLink,
-  Code, Cpu, Terminal, Sliders, Play, Layers, Eye, RefreshCw
+  Code, Cpu, Terminal, Sliders, Play, Layers, Eye, RefreshCw, Upload
 } from 'lucide-react';
 import { workbenchApi } from './api';
 
 export default function App() {
-  // Screen Router (21 screens):
+  // Screen Router (22 screens):
   // 1: 'login'          | 2: 'command_center' | 3: 'new_task'     | 4: 'understanding'
   // 5: 'plan'           | 6: 'execution'      | 7: 'activity'     | 8: 'routing'
   // 9: 'document'       | 10: 'knowledge'     | 11: 'files'       | 12: 'projects'
   // 13: 'approvals'     | 14: 'deliverables'  | 15: 'provenance'  | 16: 'security'
   // 17: 'risk_engine'   | 18: 'code_sandbox'  | 19: 'capabilities'| 20: 'model_registry'
-  // 21: 'operations'
+  // 21: 'operations'    | 22: 'calculation_workspace'
   const [screen, setScreen] = useState('login');
 
   // Auth / Role State
@@ -32,7 +32,12 @@ export default function App() {
   );
   const [projectTitle, setProjectTitle] = useState('Refinery Unit 4');
   const [classification, setClassification] = useState('INTERNAL');
-  const fileInputRef = useRef(null);
+  const globalFileInputRef = useRef(null);
+  const fileInputRef = globalFileInputRef;
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [attachedFiles, setAttachedFiles] = useState([]);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analyzeError, setAnalyzeError] = useState(null);
   const [isUploading, setIsUploading] = useState(false);
   const [documentProcessed, setDocumentProcessed] = useState({
     filename: 'inspection_report.pdf',
@@ -42,14 +47,19 @@ export default function App() {
     text_preview: 'Equipment: Compressor C-204. Finding: Surface corrosion on flange assembly. Severity: Medium. Vibration nominal.',
   });
 
-  const handleDocumentSelect = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const handleAnalyzeDocument = async (fileToAnalyze = selectedFile) => {
+    if (!fileToAnalyze) {
+      setAnalyzeError('No document attached. Please select or attach a file first.');
+      return;
+    }
 
+    setIsAnalyzing(true);
     setIsUploading(true);
+    setAnalyzeError(null);
+
     try {
-      const response = await workbenchApi.uploadDocument(role, file);
-      const fname = response.data?.filename || file.name;
+      const response = await workbenchApi.uploadDocument(role, fileToAnalyze);
+      const fname = response.data?.filename || fileToAnalyze.name;
       setAttachedFileName(fname);
       const parsedText =
         response.data?.extracted_text ||
@@ -63,24 +73,49 @@ export default function App() {
       }
       setDocumentProcessed({
         filename: fname,
-        bytes: response.data?.bytes || file.size,
+        bytes: response.data?.bytes || fileToAnalyze.size,
         sha256: response.data?.sha256 || null,
         status: response.data?.status || 'PROCESSED',
         text_preview: response.data?.text_preview || (parsedText ? parsedText.substring(0, 300) : ''),
       });
+      return response.data;
     } catch (error) {
-      console.error('Upload failed:', error);
+      console.error('Upload/analysis failed:', error);
+      const rawDetail =
+        error.response?.data?.detail ||
+        error.response?.data?.message ||
+        error.message ||
+        'Failed to process document';
+      const formattedError = typeof rawDetail === 'string' ? rawDetail : JSON.stringify(rawDetail);
+      setAnalyzeError(formattedError);
       setDocumentProcessed((prev) => ({
         ...prev,
         status: 'FAILED',
       }));
     } finally {
+      setIsAnalyzing(false);
       setIsUploading(false);
     }
   };
 
+  const handleDocumentSelect = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setSelectedFile(file);
+    setAttachedFiles([file]);
+    setAttachedFileName(file.name);
+    setAnalyzeError(null);
+
+    // Automatically analyze the uploaded document
+    await handleAnalyzeDocument(file);
+  };
+
   const triggerFileUpload = () => {
-    fileInputRef.current?.click();
+    if (globalFileInputRef.current) {
+      globalFileInputRef.current.value = '';
+      globalFileInputRef.current.click();
+    }
   };
   // Approval Flow State (WEB 13)
   const [approvalDecision, setApprovalDecision] = useState(null);
@@ -106,20 +141,26 @@ export default function App() {
   // Operations Filter State (WEB 21)
   const [operationFilter, setOperationFilter] = useState('Processing');
 
-  // Code Workspace Sandbox Lines (WEB 18)
-  const [codePrompt, setCodePrompt] = useState('Write a pressure-drop calculator.');
-  const codeLines = [
-    'def calculate_drop():',
-    '    # parameters',
-    '    result = ...',
-    '    return result',
-    '',
-    'assert result >= 0',
-    '',
-    'print(result)',
-    'def calculate_drop():',
-    '    # parameters'
-  ];
+  // Task Mode State
+  const [taskMode, setTaskMode] = useState('general');
+
+  // Code Workspace Sandbox State (WEB 18)
+  const [codePrompt, setCodePrompt] = useState('Write a Python function with unit tests for...');
+  const [codeOutput, setCodeOutput] = useState('');
+  const [codeLoading, setCodeLoading] = useState(false);
+  const [codeError, setCodeError] = useState(null);
+  const [routedModel, setRoutedModel] = useState(null);
+
+  // Calculation Workspace State (WEB 22)
+  const [calcPrompt, setCalcPrompt] = useState(
+    'Calculate the pressure drop across a 500ft schedule 40 pipe for water at 60°F flowing at 150 gpm.'
+  );
+  const [calcParams, setCalcParams] = useState('');
+  const [calcOutput, setCalcOutput] = useState('');
+  const [calcLoading, setCalcLoading] = useState(false);
+  const [calcError, setCalcError] = useState(null);
+  const [calcRoutedModel, setCalcRoutedModel] = useState('qwen3:4b');
+  const [calcTier, setCalcTier] = useState('general-reasoning');
 
   // Model Registry & Fabric State (Live from /api/v1/models/status)
   const [modelRegistryData, setModelRegistryData] = useState(null);
@@ -397,8 +438,57 @@ export default function App() {
     }
   };
 
+  const handleGenerateCode = async () => {
+    setCodeLoading(true);
+    setCodeError(null);
+    try {
+      const res = await workbenchApi.generateInference(role, 'coding', codePrompt, classification);
+      setCodeOutput(res.data?.output || '');
+      setRoutedModel(res.data?.routing?.selected_model || 'qwen2.5-coder:3b');
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Code generation failed';
+      setCodeError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setCodeLoading(false);
+    }
+  };
+
+  const handleRunCalculation = async () => {
+    setCalcLoading(true);
+    setCalcError(null);
+    try {
+      const promptToSend = calcParams.trim()
+        ? `${calcPrompt}\n\nParameters: ${calcParams.trim()}`
+        : calcPrompt;
+      const res = await workbenchApi.generateInference(role, 'reasoning', promptToSend, classification);
+      setCalcOutput(res.data?.output || '');
+      setCalcRoutedModel(res.data?.routing?.selected_model || 'qwen3:4b');
+      setCalcTier(res.data?.routing?.tier || 'general-reasoning');
+    } catch (err) {
+      const msg =
+        err.response?.data?.detail ||
+        err.response?.data?.error ||
+        err.message ||
+        'Calculation failed';
+      setCalcError(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    } finally {
+      setCalcLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-[#eafaf1] via-[#f0fbf5] to-[#d8f3e5] text-slate-800 flex items-center justify-center p-6 font-sans antialiased selection:bg-emerald-200">
+      <input
+        type="file"
+        ref={globalFileInputRef}
+        onChange={handleDocumentSelect}
+        accept=".pdf,.docx,.txt,.csv"
+        style={{ display: 'none' }}
+      />
 
       {/* ------------------------------------------------------------- */}
       {/* 1. WEB 1 — SECURE ACCESS                                       */}
@@ -510,7 +600,7 @@ export default function App() {
 
               <div className="pt-2 border-t border-slate-100 flex items-center gap-3 text-xs text-emerald-800 font-medium flex-wrap">
                 <button type="button" onClick={triggerFileUpload} className="hover:underline">
-                  {isUploading ? 'Uploading...' : 'Attach files'}
+                  {isAnalyzing || isUploading ? 'Uploading...' : (selectedFile ? `Attached: ${selectedFile.name}` : 'Attach files')}
                 </button>
                 <span className="text-slate-300">•</span>
                 <button onClick={() => setScreen('knowledge')} className="hover:underline">Add context</button>
@@ -539,15 +629,53 @@ export default function App() {
             <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase block">QUICK TASKS</span>
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               {[
-                { title: 'Analyze Document', icon: FileText, dest: 'document' },
-                { title: 'Search Knowledge', icon: Search, dest: 'knowledge' },
-                { title: 'Write / Draft', icon: Edit3, dest: 'new_task' },
-                { title: 'Run Calculation', icon: Calculator, dest: 'code_sandbox' },
-                { title: 'Code & Verify', icon: ShieldCheck, dest: 'risk_engine' },
+                {
+                  title: 'Analyze Document',
+                  icon: FileText,
+                  dest: 'document',
+                  onClick: () => setScreen('document'),
+                },
+                {
+                  title: 'Search Knowledge',
+                  icon: Search,
+                  dest: 'knowledge',
+                  onClick: () => setScreen('knowledge'),
+                },
+                {
+                  title: 'Write / Draft',
+                  icon: Edit3,
+                  dest: 'new_task',
+                  onClick: () => {
+                    setTaskMode('draft');
+                    setTaskPrompt(
+                      'Draft an internal approval note or engineering memo based on attached inputs and organizational SOPs.'
+                    );
+                    setScreen('new_task');
+                  },
+                },
+                {
+                  title: 'Run Calculation',
+                  icon: Calculator,
+                  dest: 'calculation_workspace',
+                  onClick: () => {
+                    setTaskMode('calculation');
+                    setScreen('calculation_workspace');
+                  },
+                },
+                {
+                  title: 'Code & Verify',
+                  icon: ShieldCheck,
+                  dest: 'code_sandbox',
+                  onClick: () => {
+                    setTaskMode('coding');
+                    setCodePrompt('Write a Python function with unit tests for...');
+                    setScreen('code_sandbox');
+                  },
+                },
               ].map((item, idx) => (
                 <button
                   key={idx}
-                  onClick={() => setScreen(item.dest)}
+                  onClick={item.onClick}
                   className="p-4 rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-500 hover:from-emerald-700 hover:to-emerald-600 text-white text-xs font-bold text-left flex flex-col justify-between h-24 shadow-md shadow-emerald-950/10 transition"
                 >
                   <item.icon className="w-4 h-4 opacity-80" />
@@ -578,7 +706,14 @@ export default function App() {
       {screen === 'new_task' && (
         <div className="w-full max-w-2xl animate-in fade-in duration-200 space-y-6">
           <div>
-            <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">NEW TASK</span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">NEW TASK</span>
+              {taskMode && taskMode !== 'general' && (
+                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300">
+                  {taskMode} mode
+                </span>
+              )}
+            </div>
             <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Create a job</h1>
             <p className="text-slate-600 text-sm mt-1">Define the outcome, context and inputs.</p>
           </div>
@@ -602,16 +737,9 @@ export default function App() {
                 onClick={triggerFileUpload}
                 className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80 cursor-pointer hover:border-emerald-300 transition"
               >
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleDocumentSelect}
-                  accept=".pdf,.txt,.docx,.csv"
-                  className="hidden"
-                />
                 <p className="text-sm font-bold text-slate-800">+ Attach files</p>
                 <p className="text-xs text-emerald-700 mt-1">
-                  {isUploading ? 'Extracting text...' : (attachedFileName || 'PDF, image, spreadsheet, document')}
+                  {isAnalyzing || isUploading ? 'Extracting text...' : (selectedFile?.name || attachedFileName || 'PDF, image, spreadsheet, document')}
                 </p>
               </div>
 
@@ -657,8 +785,12 @@ export default function App() {
             <div className="bg-white/95 rounded-2xl p-5 shadow-sm border border-emerald-100/80">
               <span className="text-xs font-bold text-emerald-800 block">Task type</span>
               <p className="text-sm font-medium text-slate-800 mt-1">
-                {taskPrompt.toLowerCase().includes('code')
+                {taskMode === 'draft'
+                  ? 'Document Drafting & SOP Synthesis'
+                  : taskMode === 'coding' || taskPrompt.toLowerCase().includes('code')
                   ? 'Code Review & Analysis'
+                  : taskMode === 'calculation'
+                  ? 'Engineering Calculation & Reasoning'
                   : taskPrompt.toLowerCase().includes('inspect')
                   ? 'Industrial Document Analysis'
                   : 'Engineering Reasoning'}
@@ -1206,12 +1338,80 @@ export default function App() {
               <p className="text-slate-600 text-sm mt-1">Move between original evidence, extracted information and sources.</p>
             </div>
             <button
-              onClick={() => setScreen('execution')}
+              onClick={() => setScreen('command_center')}
               className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
+              title="Back to Command Center"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
           </div>
+
+          {/* Document Upload & Analysis Action Bar */}
+          <div className="bg-white/95 backdrop-blur-md rounded-3xl p-5 shadow-sm border border-emerald-100/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-100/80 text-emerald-800 flex items-center justify-center shrink-0">
+                <FileText className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active Document:</span>
+                  <span className="text-xs font-bold text-slate-900 font-mono truncate">
+                    {selectedFile?.name || attachedFileName || 'None'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {selectedFile
+                    ? `${(selectedFile.size / 1024).toFixed(1)} KB • Ready for processing`
+                    : (docContext ? 'Extracted text loaded • Attach a file to re-process' : 'No document attached. Click Attach File to select a report.')}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={triggerFileUpload}
+                className="flex-1 sm:flex-none px-4 py-2.5 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-800 border border-emerald-200/80 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+              >
+                <Upload className="w-3.5 h-3.5" />
+                <span>{selectedFile ? 'Change File' : 'Attach File'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleAnalyzeDocument(selectedFile)}
+                disabled={isAnalyzing || !selectedFile}
+                className={`flex-1 sm:flex-none px-5 py-2.5 rounded-2xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm ${
+                  isAnalyzing || !selectedFile
+                    ? 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed'
+                    : 'bg-gradient-to-r from-emerald-600 to-emerald-700 text-white hover:from-emerald-700 hover:to-emerald-800'
+                }`}
+              >
+                {isAnalyzing ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Analyzing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-3.5 h-3.5 fill-current" />
+                    <span>Analyze Document</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Analyze Error Banner */}
+          {analyzeError && (
+            <div className="bg-red-50/95 border border-red-200 text-red-700 text-xs rounded-2xl p-4 flex items-start gap-3 animate-in fade-in duration-150">
+              <AlertCircle className="w-4 h-4 mt-0.5 shrink-0 text-red-500" />
+              <div className="space-y-0.5 flex-1 min-w-0">
+                <p className="font-bold">Document Analysis Failed</p>
+                <p className="font-mono text-[11px] break-all leading-relaxed">{analyzeError}</p>
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
             <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-4">
@@ -1225,10 +1425,12 @@ export default function App() {
               </div>
               <div className="bg-slate-50/90 border border-slate-200/80 rounded-2xl p-3.5 max-h-64 overflow-y-auto space-y-2">
                 <span className="text-[10px] font-bold font-mono text-slate-500 block uppercase truncate">
-                  {attachedFileName}
+                  {selectedFile?.name || attachedFileName}
                 </span>
                 <p className="text-xs text-slate-700 leading-relaxed font-sans whitespace-pre-wrap">
-                  {docContext || 'No document content extracted. Attach a document to inspect.'}
+                  {isAnalyzing
+                    ? 'Processing and extracting text content...'
+                    : (docContext || 'No document content extracted. Attach a document to inspect.')}
                 </p>
               </div>
             </div>
@@ -1236,13 +1438,19 @@ export default function App() {
             <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 space-y-3.5 text-xs">
               <div>
                 <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">DOCUMENT SOURCE</span>
-                <p className="text-sm font-bold text-slate-800 mt-0.5 font-mono truncate">{attachedFileName || 'None'}</p>
+                <p className="text-sm font-bold text-slate-800 mt-0.5 font-mono truncate">{selectedFile?.name || attachedFileName || 'None'}</p>
               </div>
 
               <div>
                 <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">PROCESSING STATUS</span>
-                <span className="inline-block mt-0.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                  {documentProcessed?.status || (docContext ? 'PROCESSED' : 'Not processed')}
+                <span className={`inline-block mt-0.5 px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${
+                  isAnalyzing
+                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                    : documentProcessed?.status === 'FAILED'
+                    ? 'bg-red-50 text-red-700 border-red-200'
+                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                }`}>
+                  {isAnalyzing ? 'ANALYZING...' : (documentProcessed?.status || (docContext ? 'PROCESSED' : 'Not processed'))}
                 </span>
               </div>
 
@@ -1487,12 +1695,21 @@ export default function App() {
               <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Secure files</h1>
               <p className="text-slate-600 text-sm mt-1">Documents and engineering inputs available to authorized work.</p>
             </div>
-            <button
-              onClick={() => setScreen('command_center')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
-            >
-              <ArrowLeft className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={triggerFileUpload}
+                className="py-2 px-3.5 bg-emerald-100/80 hover:bg-emerald-200/80 text-emerald-800 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+              >
+                <Upload className="w-3.5 h-3.5" /> Attach file
+              </button>
+              <button
+                onClick={() => setScreen('command_center')}
+                className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           <div className="flex flex-wrap gap-2.5">
@@ -1513,10 +1730,11 @@ export default function App() {
           <div className="space-y-3">
             {(() => {
               const workspaceFiles = [];
-              if (attachedFileName) {
+              if (selectedFile || attachedFileName) {
+                const activeName = selectedFile?.name || attachedFileName;
                 workspaceFiles.push({
-                  name: attachedFileName,
-                  type: attachedFileName.split('.').pop().toUpperCase(),
+                  name: activeName,
+                  type: activeName.split('.').pop().toUpperCase(),
                   security: agentResult?.security?.classification || classification,
                   category: 'Recent',
                   badge: 'Active Input',
@@ -2631,7 +2849,8 @@ export default function App() {
             </div>
             <button
               onClick={() => setScreen('command_center')}
-              className="p-2 rounded-xl text-slate-500 hover:text-slate-800"
+              aria-label="Back to Command Center"
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 transition"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -2639,23 +2858,74 @@ export default function App() {
 
           <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
             {/* Left Prompt Column */}
-            <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80">
-              <textarea
-                value={codePrompt}
-                onChange={(e) => setCodePrompt(e.target.value)}
-                rows={4}
-                className="w-full bg-transparent text-sm font-bold text-slate-900 focus:outline-none resize-none"
-              />
+            <div className="md:col-span-4 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 flex flex-col justify-between gap-4">
+              <div className="space-y-2">
+                <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase block">Code specification</span>
+                <textarea
+                  value={codePrompt}
+                  onChange={(e) => setCodePrompt(e.target.value)}
+                  rows={6}
+                  placeholder="Describe the Python function or script to generate..."
+                  className="w-full bg-slate-50 border border-slate-200/80 rounded-2xl p-3 text-sm font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 resize-none leading-relaxed"
+                />
+              </div>
+
+              <button
+                type="button"
+                disabled={codeLoading || !codePrompt.trim()}
+                onClick={handleGenerateCode}
+                className="w-full py-3.5 px-5 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-emerald-800/20 transition flex items-center justify-center gap-2"
+              >
+                {codeLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Generating...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" /> Generate & Verify
+                  </>
+                )}
+              </button>
             </div>
 
             {/* Middle Code Editor Column */}
-            <div className="md:col-span-5 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 font-mono text-xs text-emerald-700 leading-relaxed space-y-1">
-              {codeLines.map((line, idx) => (
-                <div key={idx} className="flex gap-4">
-                  <span className="text-slate-400 w-4 text-right select-none">{idx + 1}</span>
-                  <span className="text-emerald-700 font-medium whitespace-pre">{line}</span>
-                </div>
-              ))}
+            <div className="md:col-span-5 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 font-mono text-xs text-emerald-700 leading-relaxed flex flex-col">
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-emerald-100/80">
+                <span className="font-sans font-bold text-xs text-slate-700 uppercase tracking-wider">Editor & Output</span>
+                {routedModel && (
+                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-sans font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                    Model: {routedModel}
+                  </span>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-auto max-h-[380px] space-y-1">
+                {codeLoading ? (
+                  <div className="flex flex-col items-center justify-center h-48 gap-2 text-slate-500 font-sans">
+                    <Loader2 className="w-6 h-6 animate-spin text-emerald-700" />
+                    <span className="text-xs font-semibold">Generating & verifying in sandbox...</span>
+                  </div>
+                ) : codeError ? (
+                  <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 font-sans text-xs flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-bold">Generation failed</p>
+                      <p className="mt-1 font-mono text-[11px] break-all">{codeError}</p>
+                    </div>
+                  </div>
+                ) : codeOutput ? (
+                  codeOutput.split('\n').map((line, idx) => (
+                    <div key={idx} className="flex gap-4">
+                      <span className="text-slate-400 w-5 text-right select-none shrink-0">{idx + 1}</span>
+                      <span className="text-emerald-700 font-medium whitespace-pre break-all">{line}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-48 text-slate-400 font-sans text-xs italic">
+                    Click "Generate & Verify" to synthesize and test code in sandbox.
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Right Sandbox Policy Column */}
@@ -2663,21 +2933,31 @@ export default function App() {
               <div className="space-y-6">
                 <div>
                   <span className="text-xs font-bold text-emerald-800 tracking-wider block">ISOLATED</span>
+                  <span className="text-[11px] text-slate-500">Air-gapped execution</span>
                 </div>
 
                 <div>
                   <span className="text-xs font-bold text-emerald-800 tracking-wider block">Network OFF</span>
+                  <span className="text-[11px] text-slate-500">Zero egress policy</span>
                 </div>
 
                 <div>
                   <span className="text-xs font-bold text-emerald-800 tracking-wider block">Files TEMP</span>
+                  <span className="text-[11px] text-slate-500">Ephemeral sandbox</span>
                 </div>
 
-                <div className="flex items-center gap-1 text-xs font-bold text-emerald-800">
-                  <span>Tests</span>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-800">
+                  <span>Sandbox Verification</span>
                   <Check className="w-3.5 h-3.5 stroke-[2.5]" />
                 </div>
               </div>
+
+              {routedModel && (
+                <div className="pt-4 border-t border-slate-100 text-[11px] text-slate-600">
+                  <span className="font-bold text-emerald-800 block">Routed Model</span>
+                  <span className="font-mono">{routedModel}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -3011,6 +3291,124 @@ export default function App() {
           <p className="text-[11px] text-slate-500 pt-2 border-t border-slate-100 font-medium">
             Historical task records are stored on-premise in TASKS_DIR. Multi-task queue listing API is not instrumented on this node.
           </p>
+        </div>
+      )}
+
+      {/* ------------------------------------------------------------- */}
+      {/* 22. WEB 22 — CALCULATION WORKSPACE                            */}
+      {/* ------------------------------------------------------------- */}
+      {screen === 'calculation_workspace' && (
+        <div className="w-full max-w-4xl animate-in fade-in duration-200 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <span className="text-xs font-bold tracking-wider text-emerald-800 uppercase">ENGINEERING</span>
+              <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight mt-1">Calculation workspace</h1>
+              <p className="text-slate-600 text-sm mt-1">Perform deterministic and verified engineering calculations.</p>
+            </div>
+            <button
+              onClick={() => setScreen('command_center')}
+              aria-label="Back to Command Center"
+              className="p-2 rounded-xl text-slate-500 hover:text-slate-800 transition"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-stretch">
+            {/* Left Input Column */}
+            <div className="md:col-span-5 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 flex flex-col justify-between gap-4">
+              <div className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold tracking-wider text-emerald-800 uppercase block mb-1.5">
+                    Calculation Prompt
+                  </label>
+                  <textarea
+                    rows={5}
+                    value={calcPrompt}
+                    onChange={(e) => setCalcPrompt(e.target.value)}
+                    placeholder="Enter engineering calculation specification..."
+                    className="w-full bg-slate-50 border border-slate-200/80 rounded-2xl p-3 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 resize-none leading-relaxed"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold tracking-wider text-emerald-800 uppercase block mb-1.5">
+                    Optional Parameters
+                  </label>
+                  <input
+                    type="text"
+                    value={calcParams}
+                    onChange={(e) => setCalcParams(e.target.value)}
+                    placeholder="e.g. Pipe length: 500ft, Flow rate: 150 gpm"
+                    className="w-full bg-slate-50 border border-slate-200/80 rounded-2xl px-4 py-3 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-emerald-500/30 font-mono"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                disabled={calcLoading || !calcPrompt.trim()}
+                onClick={handleRunCalculation}
+                className="w-full py-3.5 px-6 rounded-2xl font-semibold text-white text-sm bg-gradient-to-r from-emerald-700 to-emerald-600 hover:from-emerald-800 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-emerald-800/20 transition flex items-center justify-center gap-2"
+              >
+                {calcLoading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Calculating...
+                  </>
+                ) : (
+                  <>
+                    <Calculator className="w-4 h-4" /> Run Calculation
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Right Output Panel */}
+            <div className="md:col-span-7 bg-white/95 rounded-3xl p-6 shadow-sm border border-emerald-100/80 flex flex-col">
+              <div className="flex items-center justify-between pb-3 mb-3 border-b border-emerald-100/80">
+                <span className="font-bold text-xs text-slate-700 uppercase tracking-wider">
+                  Step-by-Step Calculation Result
+                </span>
+                <div className="flex items-center gap-2">
+                  {calcRoutedModel && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                      Model: {calcRoutedModel}
+                    </span>
+                  )}
+                  {calcTier && (
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-700 border border-slate-200">
+                      tier {calcTier}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-auto max-h-[420px]">
+                {calcLoading ? (
+                  <div className="flex flex-col items-center justify-center h-56 gap-2 text-slate-500">
+                    <Loader2 className="w-6 h-6 animate-spin text-emerald-700" />
+                    <span className="text-xs font-semibold">Running sovereign reasoning & calculation...</span>
+                  </div>
+                ) : calcError ? (
+                  <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-bold">Calculation failed</p>
+                      <p className="mt-1 font-mono text-[11px] break-all">{calcError}</p>
+                    </div>
+                  </div>
+                ) : calcOutput ? (
+                  <div className="p-4 rounded-2xl bg-slate-50/80 border border-slate-200/60 font-mono text-xs text-slate-800 whitespace-pre-wrap leading-relaxed">
+                    {calcOutput}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-56 text-slate-400 text-xs italic">
+                    Configure prompt and optional parameters, then click "Run Calculation".
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
