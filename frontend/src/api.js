@@ -41,7 +41,6 @@ export const workbenchApi = {
         return axios.post(`${API_BASE}/documents/process`, formData, {
             headers: {
                 Authorization: `Bearer ${token}`,
-                'Content-Type': 'multipart/form-data',
             },
         });
     },
