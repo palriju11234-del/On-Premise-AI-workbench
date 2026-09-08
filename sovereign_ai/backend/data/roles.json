@@ -1,0 +1,31 @@
+{
+    "ADMIN": [
+        "upload_documents",
+        "retrieve_knowledge",
+        "execute_agents",
+        "use_tools",
+        "approve_actions",
+        "view_audit",
+        "manage_knowledge",
+        "manage_models",
+        "manage_users"
+    ],
+    "ENGINEER": [
+        "upload_documents",
+        "retrieve_knowledge",
+        "execute_agents",
+        "use_tools",
+        "manage_knowledge"
+    ],
+    "REVIEWER": [
+        "retrieve_knowledge",
+        "approve_actions",
+        "view_audit"
+    ],
+    "OPERATOR": [
+        "upload_documents",
+        "retrieve_knowledge",
+        "execute_agents",
+        "use_tools"
+    ]
+}

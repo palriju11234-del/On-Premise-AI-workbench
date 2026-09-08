@@ -1,6 +1,8 @@
 fastapi
 uvicorn[standard]
 pydantic
+pydantic-settings
+httpx
 python-dotenv
 python-multipart
 ollama
@@ -14,3 +16,4 @@ python-docx
 pandas
 numpy
 streamlit
+pytest
