@@ -1,4 +1,10 @@
-# <p align="center"><img src="https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=2070&auto=format&fit=crop" alt="Sovereign AI Banner" width="100%" height="300" style="object-fit: cover; border-radius: 8px;" /></p>
+<p align="center">
+  <img src="./assets/sovereign-banner.jpeg"
+       alt="Sovereign AI Banner"
+       width="100%"
+       height="300"
+       style="object-fit: cover; border-radius: 8px;" />
+</p>
 
 # <p align="center">🔐 Sovereign Agentic Workbench 🔐</p>
 ### <p align="center">**Zero-Trust, Controlled Agentic AI Layer for Confidential Workflows**</p>
@@ -100,46 +106,15 @@ Every Thought/Action/Observation triple is logged live. The network monitor is t
 > 🔒 **AIR-GAPPED / NO CLOUD**
 > All data, reasoning, and models stay inside the organization's own network — proven by the log, not stated on a slide.
 
-### Architecture Flow
 
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 80, "rankSpacing": 100}}}%%
-flowchart LR
-    subgraph workflow[CONTROLLED WORKFLOW]
-        A[Industrial User] --> B[Sovereign Workbench]
-        B --> C{Task Classifier}
-        C --> D[Sovereign Agent Core]
-        D --> E[Knowledge Fabric<br/>RAG]
-        D --> F[Capability Fabric<br/>OCR + Tools]
-        D --> G[Model Fabric<br/>Local Models]
-        E --> H[Trust & Governance]
-        F --> H
-        G --> H
-        H --> I[Human Approval Gate]
-        I --> J[Deliverable]
-    end
+### 🔄 Workflow
 
-    workflow -->|every step writes an event| K[Cryptographic Audit Log<br/>Hash-chained provenance]
-    J --> L[On-Premise AI Fabric]
-    K --> L
-
-    classDef input fill:#ffe4c4,stroke:#c2410c,color:#431407;
-    classDef workspace fill:#dbeafe,stroke:#2563eb,color:#172554;
-    classDef routing fill:#fef3c7,stroke:#d97706,color:#451a03;
-    classDef agent fill:#ede9fe,stroke:#7c3aed,color:#2e1065;
-    classDef fabric fill:#cffafe,stroke:#0891b2,color:#083344;
-    classDef trust fill:#fee2e2,stroke:#dc2626,color:#450a0a;
-    classDef output fill:#dcfce7,stroke:#16a34a,color:#052e16;
-
-    class A input;
-    class B workspace;
-    class C routing;
-    class D agent;
-    class E,F,G fabric;
-    class H,I trust;
-    class K trust;
-    class J,L output;
-```
+<p align="center">
+  <img src="./assets/workflow.png"
+       alt="Sovereign AI Workbench Workflow"
+       width="95%"
+       style="border-radius: 10px;" />
+</p>
 
 ---
 
