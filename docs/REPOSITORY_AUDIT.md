@@ -1,296 +1,342 @@
-# Repository Audit: Sovereign On-Premise Agentic AI Workbench
+# Sovereign AI Workbench — Repository Audit & Architecture Assessment
 
-**Date:** September 2, 2026  
-**Project:** Sovereign On-Premise Agentic AI Workbench  
-**Repository Scope:** `sovereign-ai/`  
-**Audit Purpose:** Comprehensive inspection of current codebase architecture, existing components, technical debt, and integration roadmap prior to feature development.
+**Audit Date**: September 2, 2026  
+**Auditor**: Antigravity Assistant  
+**Branch**: `tiYasa-development`  
+**Phase**: Phase 0 — Comprehensive Repository Audit  
+**Scope**: Zero modifications to existing runtime code. Pure architectural and codebase inspection.
 
 ---
 
-## 1. Current Architecture
+## 1. Executive Summary
 
-The existing repository implements a single-tenant prototype monolith centered around a **Streamlit** user interface (`sovereign-ai/app.py`). It demonstrates an end-to-end flow for processing confidential inspection documents using local machine learning models and vector databases.
+The **Sovereign AI Workbench** is designed as an on-premise, enterprise-grade AI operations platform operating with strict **zero external network egress**. It aims to deliver private, auditable, and governed agentic workflows for confidential enterprise data (such as industrial inspection reports, maintenance SOPs, and compliance records).
+
+### Current State
+The existing repository contains an **early proof-of-concept (PoC)** prototype. It demonstrates the conceptual pipeline:
+1. File upload via Streamlit UI.
+2. PDF text extraction with basic OCR fallback.
+3. Keyword-based classification (`GENERAL`, `INTERNAL`, `CONFIDENTIAL`).
+4. Rule-based model routing (`reasoning`, `vision`, `coding`).
+5. Vector retrieval against a local ChromaDB instance using SentenceTransformers.
+6. Local LLM prompting via the Ollama client.
+7. Length-based output verification heuristic.
+8. Unwired human-in-the-loop (HITL) approval buttons and a disconnected Word document generator.
+
+While the foundational module layout exists, the current implementation consists largely of stubs, mock checks, hardcoded variables, and loose couplings that require systematic hardening before reaching production readiness.
+
+---
+
+## 2. Repository Structure
+
+### Directory Tree
 
 ```
-+-----------------------------------------------------------------------------------+
-|                                STREAMLIT UI (app.py)                              |
-+-----------------------------------------------------------------------------------+
-       |                                      |                               |
-       v                                      v                               v
-+------------------+                +--------------------+          +--------------------+
-|  Doc Parser/OCR  |                |   Security Engine  |          | Local Vector Store |
-| (fitz/pytesseract)                | (Keyword Matching) |          | (ChromaDB+MiniLM)  |
-+------------------+                +--------------------+          +--------------------+
-       |                                      |                               |
-       +------------------+                   |                   +-----------+
-                          |                   |                   |
-                          v                   v                   v
-                    +---------------------------------------------------+
-                    |              SovereignAgent (agent.py)            |
-                    +---------------------------------------------------+
-                                              |
-                                              v
-                                    +--------------------+
-                                    |    Ollama LLM      |
-                                    | (qwen3 / qwen2.5)  |
-                                    +--------------------+
-                                              |
-                                              v
-                                    +--------------------+
-                                    | Verifier (Length)  |
-                                    +--------------------+
-                                              |
-                                              v
-                                    +--------------------+
-                                    | Streamlit Output & |
-                                    |  Governance Gate   |
-                                    +--------------------+
+On-Premise-AI-workbench/
+├── .git/
+├── .gitignore
+├── README.md                          # Minimal 1-line root readme
+├── docs/
+│   └── REPOSITORY_AUDIT.md            # [NEW] This document
+└── sovereign-ai/
+    ├── .env                           # Empty (0 bytes)
+    ├── README.md                      # Empty (0 bytes)
+    ├── requirements.txt               # 10 dependencies listed
+    ├── app.py                         # Streamlit application entry point
+    ├── setup_knowledge.py             # Knowledge ingestion script
+    ├── audit/
+    │   └── events.jsonl               # Contains corrupted sample data ("vjhv")
+    ├── config/
+    │   └── models.json                # Model router configuration
+    ├── core/
+    │   ├── __init__.py                # Empty
+    │   ├── agent.py                   # LocalLLM and SovereignAgent orchestrator
+    │   ├── model_router.py            # ModelRouter loading config/models.json
+    │   ├── policy.py                  # Stub (contains print statement only)
+    │   ├── provenance.py              # Provenance ledger (file hashing & JSONL logging)
+    │   ├── security.py                # SecurityEngine keyword classifier
+    │   └── verifier.py                # Verifier length-heuristic stub
+    ├── data/
+    │   ├── knowledge/
+    │   │   └── Maintenance_SOP.txt    # Industrial SOP text file
+    │   ├── uploads/                   # Created dynamically by app.py for uploads
+    │   └── vector_db/                 # ChromaDB persistent store with indexed collection
+    ├── document/
+    │   ├── __init__.py                # Empty
+    │   ├── generator.py               # create_approval_note (python-docx generator)
+    │   ├── ocr.py                     # ocr_pdf using fitz + pytesseract
+    │   └── parser.py                  # extract_pdf_text using fitz (PyMuPDF)
+    ├── rag/
+    │   ├── __init__.py                # Empty
+    │   ├── ingest.py                  # Ingestion logic reading data/knowledge/*.txt
+    │   ├── retriever.py               # Stub (contains print statement only)
+    │   └── vectorstore.py             # LocalVectorStore (ChromaDB + all-MiniLM-L6-v2)
+    └── utils/
+        ├── __init__.py                # Empty
+        └── hashing.py                 # Empty (0 bytes)
 ```
 
-### Execution Flow:
-1. **Document Ingestion:** Streamlit receives user uploaded PDF/Image files and saves them to `data/uploads/`.
-2. **Text Extraction & OCR:** PDF text is extracted using PyMuPDF (`fitz`). If extracted text length is under 100 characters, it falls back to PyTesseract OCR (`ocr_pdf`).
-3. **Security Classification:** `SecurityEngine` scans text against 8 hardcoded keywords to assign a sensitivity label (`CONFIDENTIAL`, `INTERNAL`, `GENERAL`).
-4. **Model Selection:** `ModelRouter` reads `config/models.json` to select an Ollama model profile based on task type (`reasoning`, `vision`, `coding`).
-5. **Knowledge Retrieval:** `LocalVectorStore` queries persistent ChromaDB storage (`data/vector_db`) using `sentence-transformers/all-MiniLM-L6-v2` embeddings for top-3 relevant context chunks.
-6. **Local LLM Execution:** `SovereignAgent` constructs a prompt combining document text and retrieved knowledge context, invoking `ollama.chat()` locally.
-7. **Verification & Risk Assessment:** `Verifier` checks output validity (prototype check based on response character count). `CONFIDENTIAL` classification triggers a `human_required` governance flag.
-8. **UI Presentation & Deliverables:** Streamlit renders classification metrics, LLM answer, and governance buttons. `document.generator` provides a helper to export output to DOCX.
-
 ---
 
-## 2. Existing Components
+## 3. Architecture & Dataflow
 
-| Component File / Folder | Purpose | Current Status | Dependencies |
-| :--- | :--- | :--- | :--- |
-| [`sovereign-ai/app.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/app.py) | Streamlit web application & end-to-end pipeline orchestrator | **Functional Prototype** (Tightly coupled UI & logic) | `streamlit`, `pathlib`, `document.parser`, `document.ocr`, `rag.vectorstore`, `core.agent` |
-| [`sovereign-ai/requirements.txt`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/requirements.txt) | Environment dependencies declaration | **Active** | `streamlit`, `ollama`, `chromadb`, `sentence-transformers`, `pymupdf`, `pytesseract`, `Pillow`, `python-docx`, `pandas`, `numpy` |
-| [`sovereign-ai/.env`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/.env) | Environment configuration variables | **Empty** | None |
-| [`sovereign-ai/README.md`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/README.md) | Project documentation | **Empty** | None |
-| [`sovereign-ai/config/models.json`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/config/models.json) | Local LLM capability map (reasoning, vision, coding) | **Active** | `json`, `pathlib` |
-| [`sovereign-ai/setup_knowledge.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/setup_knowledge.py) | Script to trigger knowledge base vector ingestion | **Functional Script** | `rag.ingest` |
-| [`sovereign-ai/core/agent.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/agent.py) | `LocalLLM` wrapper & `SovereignAgent` prompt execution pipeline | **Active** | `ollama`, `core.model_router`, `core.verifier`, `core.security`, `core.provenance` |
-| [`sovereign-ai/core/model_router.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/model_router.py) | Model selector reading capability JSON | **Active** | `json`, `pathlib` |
-| [`sovereign-ai/core/security.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/security.py) | Keyword-based document sensitivity classifier | **Active Prototype** | None |
-| [`sovereign-ai/core/verifier.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/verifier.py) | Output verification engine | **Stub** (checks answer length >= 50) | None |
-| [`sovereign-ai/core/provenance.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/provenance.py) | File SHA-256 hashing & JSONL audit trail logger | **Partially Disconnected** | `hashlib`, `json`, `datetime`, `pathlib` |
-| [`sovereign-ai/core/policy.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/policy.py) | Policy enforcement module | **Empty Stub** (`print("policy.py loaded")`) | None |
-| [`sovereign-ai/document/parser.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/parser.py) | PDF text extractor | **Functional** | `fitz` (PyMuPDF) |
-| [`sovereign-ai/document/ocr.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/ocr.py) | PDF page image conversion & Tesseract OCR fallback | **Functional** | `fitz`, `pytesseract`, `PIL`, `io` |
-| [`sovereign-ai/document/generator.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/generator.py) | DOCX Approval Note builder | **Functional Helper** | `docx` (python-docx) |
-| [`sovereign-ai/rag/vectorstore.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/rag/vectorstore.py) | Local vector store wrapper around ChromaDB persistent client | **Active** (Contains ID overwrite bug) | `chromadb`, `sentence_transformers` |
-| [`sovereign-ai/rag/ingest.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/rag/ingest.py) | Batch loader for `data/knowledge/*.txt` files | **Functional** | `pathlib`, `rag.vectorstore` |
-| [`sovereign-ai/rag/retriever.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/rag/retriever.py) | Advanced context retriever | **Empty Stub** (`print("retriever.py loaded")`) | None |
-| [`sovereign-ai/utils/hashing.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/utils/hashing.py) | Hashing utilities | **Empty File** (0 bytes) | None |
-| [`sovereign-ai/data/knowledge/Maintenance_SOP.txt`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/data/knowledge/Maintenance_SOP.txt) | Sample SOP reference document | **Active Data** | None |
-| [`sovereign-ai/data/vector_db/`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/data/vector_db) | ChromaDB persistent SQLite vector database | **Active Data** | `chromadb` |
-| [`sovereign-ai/audit/events.jsonl`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/audit/events.jsonl) | Log file for audit trail records | **Corrupted/Test Data** (contains `"vjhv"`) | None |
+### End-to-End Component Flow
 
----
+```mermaid
+flowchart TD
+    subgraph Frontend["Streamlit Web UI (app.py)"]
+        UI_Upload["Document Upload\n(PDF, PNG, JPG)"]
+        UI_Task["Task Prompt Input"]
+        UI_Status["Execution Status Bar"]
+        UI_Display["Results & Metrics Display"]
+        UI_HITL["Approve / Reject Buttons\n(Currently Unwired)"]
+    end
 
-## 3. Already Implemented
+    subgraph DocProc["Document Processing (document/)"]
+        Parser["parser.extract_pdf_text\n(PyMuPDF)"]
+        OCR["ocr.ocr_pdf\n(PyMuPDF Pixmap + Tesseract)"]
+        Gen["generator.create_approval_note\n(python-docx, Unused)"]
+    end
 
-The following features and pipelines are currently operational in the repository:
+    subgraph Core["Agent Core (core/)"]
+        Agent["SovereignAgent (agent.py)"]
+        Router["ModelRouter (model_router.py)\nconfig/models.json"]
+        Security["SecurityEngine (security.py)\nKeyword Heuristic"]
+        Verifier["Verifier (verifier.py)\nLength Check Heuristic"]
+        Provenance["Provenance (provenance.py)\nSHA256 & events.jsonl (Unwired)"]
+        LocalLLM["LocalLLM (agent.py)\nollama.chat()"]
+    end
 
-1. **PDF Parsing & OCR Engine:**
-   - Extracting structured page text via PyMuPDF.
-   - Automatic scanned-document detection and fallback to PyTesseract OCR rendering at 2x resolution matrix.
-2. **Local Embedding & Vector Storage:**
-   - Persistent ChromaDB database setup at `data/vector_db`.
-   - Local dense vector embeddings via `SentenceTransformer("all-MiniLM-L6-v2")`.
-   - Text document ingestion pipeline loading `.txt` files from `data/knowledge/`.
-3. **Local Ollama Integration:**
-   - `LocalLLM` interface executing chat completion requests against a locally hosted Ollama instance (`ollama.chat()`).
-   - Configuration-driven model capability routing (`qwen3:4b` for reasoning, `qwen3-vl:2b` for vision, `qwen2.5-coder:3b` for coding).
-4. **Basic Security & Governance Pipeline:**
-   - Text classification engine calculating sensitivity score based on predefined corporate keywords.
-   - Dynamic policy rule matching (`CONFIDENTIAL` requiring human approval, `INTERNAL` / `GENERAL` permitting auto-approval).
-5. **Basic User Interface:**
-   - Interactive Streamlit application supporting file uploads, task prompts, step-by-step status expanders, metrics visualization, and human governance action buttons.
-6. **Deliverable Generation:**
-   - Formatted Word document (`.docx`) generation for corrective maintenance approval notes.
-7. **Provenance Utilities:**
-   - SHA-256 file checksum calculation and JSONL record builder.
+    subgraph Storage["Data & Storage (data/)"]
+        Knowledge["data/knowledge/*.txt\n(Maintenance_SOP.txt)"]
+        VectorDB["ChromaDB (vectorstore.py)\nall-MiniLM-L6-v2"]
+        AuditLog["audit/events.jsonl"]
+    end
 
----
+    UI_Upload -->|PDF| Parser
+    Parser -->|< 100 chars fallback| OCR
+    Parser -->|Document Text| Agent
+    OCR -->|Document Text| Agent
+    UI_Task -->|User Task| Agent
 
-## 4. Missing Components
-
-Compared against the target enterprise **Sovereign On-Premise Agentic AI Workbench**, the current codebase is missing key architectural pillars:
-
-### A. Backend Core Architecture
-- **REST API Framework:** No FastAPI/Flask application layer; backend logic is embedded directly inside Streamlit frontend handlers.
-- **Async Execution & Queue:** No asynchronous task queue (e.g. Celery / Redis / RQ) for long-running document analysis or agent multi-step loops.
-
-### B. Security, Authentication & Governance
-- **User Authentication & Authorization:** Zero user identity, session management, OAuth2/JWT token verification, or password management.
-- **Role-Based Access Control (RBAC):** No user roles (Admin, Auditor, Operator, Viewer) or document-level access permissions.
-- **Strict Network Egress Controls:** No automated network interface monitoring, firewall hooks, or proxy guards enforcing complete air-gapped zero-egress.
-
-### C. Advanced RAG & Vector Storage
-- **Semantic Chunking & Processing:** Ingests entire text files without chunking, sliding windows, or overlap.
-- **Hybrid Search & Re-ranking:** Lacks keyword (BM25) search, reciprocal rank fusion, or cross-encoder re-ranking.
-- **Multi-Format Ingestion:** No native parsers for DOCX, XLSX, CSV, HTML, or structured JSON.
-
-### D. Model Fabric & Health System
-- **Ollama Connection & Health Management:** No fallback model routing if Ollama is unreachable, no GPU memory monitoring, no streaming output support.
-- **Context Window Management:** No token counting or dynamic prompt truncation to prevent context window overflow.
-
-### E. Agent Runtime & Tools
-- **Agent Orchestration Framework:** Single-shot static prompt execution; lacks re-act loops, multi-step planning, state preservation, memory, or external tool execution (file system, database queries).
-
-### F. Verification & HITL State Engine
-- **Hallucination & Faithfulness Engine:** `Verifier` does not check factual consistency against context documents.
-- **Approval Workflow Persistence:** UI buttons (`APPROVE`, `REJECT`) are state-transient and do not persist decisions or trigger workflow transitions in a database.
-
-### G. Infrastructure & Testing
-- **Containerization & Deployment:** No `Dockerfile`, `docker-compose.yml`, Podman spec, or systemd unit configs.
-- **Testing Suite:** 0 unit tests, integration tests, or evaluation benchmarks.
-
----
-
-## 5. Technical Debt / Problems
-
-The audit revealed critical technical debt, bugs, and architectural flaws:
-
-1. **Vector Document ID Collision Bug (`rag/vectorstore.py`):**
-   ```python
-   ids = [f"doc_{i}" for i in range(len(texts))]
-   ```
-   **Impact:** Every time `ingest_knowledge()` or `add_documents()` is called, document IDs reset to `doc_0`, `doc_1`, etc. This overwrites previous embeddings in ChromaDB rather than appending new documents.
-
-2. **Disconnected Audit Logging (`core/agent.py` & `app.py`):**
-   - `SovereignAgent.run()` collects `events` but never calls `Provenance.create_record()`.
-   - Streamlit UI (`app.py`) displays "AUDIT ACTIVE" badge while audit logging is entirely unexecuted during task processing.
-   - `audit/events.jsonl` currently contains corrupted non-JSON text (`"vjhv"`).
-
-3. **Empty Stub Modules:**
-   - [`core/policy.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/policy.py): Contains only `print("policy.py loaded")`.
-   - [`rag/retriever.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/rag/retriever.py): Contains only `print("retriever.py loaded")`.
-   - [`utils/hashing.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/utils/hashing.py): Empty 0-byte file.
-
-4. **Hardcoded Execution Inputs:**
-   - [`core/agent.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/agent.py#L54): Hardcodes filename `"inspection_report.pdf"` into `self.security.classify()`, ignoring the actual uploaded file's name.
-   - [`core/agent.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/agent.py#L47): Hardcodes `task_type = "scanned_document"`, bypassing dynamic classification for standard text PDFs or code inputs.
-
-5. **Fragile Relative Pathing:**
-   - `ModelRouter` uses `Path("config/models.json")`.
-   - `LocalVectorStore` uses `Path("data/vector_db")`.
-   - If commands or scripts are executed outside the root `sovereign-ai/` directory, `FileNotFoundError` will be thrown.
-
-6. **Trivial Security & Verification Rules:**
-   - `SecurityEngine` uses simple string matching over 8 static words (`confidential`, `internal`, `plant`, etc.), making it vulnerable to obfuscation or false positives.
-   - `Verifier` marks output as `PASSED` solely if `len(answer.strip()) >= 50`.
-
-7. **Air-Gap / Egress Risk:**
-   - `SentenceTransformer("all-MiniLM-L6-v2")` attempts to reach HuggingFace Hub on initial instantiation unless the model weights are pre-downloaded and stored locally.
-
----
-
-## 6. Recommended Integration Plan
-
-To transition from the current prototype to the target enterprise **Sovereign On-Premise Agentic AI Workbench**, existing files are mapped to future development phases:
-
-```
-+-----------------------------------------------------------------------------------+
-| PHASE 1: CORE BACKEND (FastAPI App, Config Management, Async Engine)              |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 2: SECURITY / RBAC (Policy Engine, JWT Auth, Role Permissions)             |
-| -> Refactor: sovereign-ai/core/security.py, core/policy.py                        |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 3: DOCUMENT INTELLIGENCE (Layout Parser, Multi-format OCR Pipeline)        |
-| -> Refactor: sovereign-ai/document/parser.py, document/ocr.py                    |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 4: PRIVATE RAG (Fixed Storage IDs, Chunking, Hybrid Retrieval)              |
-| -> Refactor: sovereign-ai/rag/vectorstore.py, rag/ingest.py, rag/retriever.py     |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 5: MODEL FABRIC / ROUTER (Ollama Health, Streaming, Failover)               |
-| -> Refactor: sovereign-ai/core/model_router.py, config/models.json                |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 6: AGENT RUNTIME (Multi-step Agent, Tools, State Machine)                   |
-| -> Refactor: sovereign-ai/core/agent.py                                           |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 7: VERIFICATION / HITL (Faithfulness Check, Persistent Workflow)            |
-| -> Refactor: sovereign-ai/core/verifier.py                                        |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 8: PROVENANCE / AUDIT / NO-EGRESS (Hash Chaining, Cryptographic Audit)      |
-| -> Refactor: sovereign-ai/core/provenance.py, utils/hashing.py                     |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 9: DELIVERABLES (Template Generator, DOCX/PDF Export Engine)               |
-| -> Refactor: sovereign-ai/document/generator.py                                   |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 10: FRONTEND (Enterprise Dashboard, Audit Viewer, HITL Portal)              |
-| -> Refactor: sovereign-ai/app.py                                                  |
-+-----------------------------------------------------------------------------------+
-       |
-       v
-+-----------------------------------------------------------------------------------+
-| PHASE 11: INTEGRATION (Docker/Podman Deployment, E2E Tests, Air-gap Verification)  |
-+-----------------------------------------------------------------------------------+
+    Agent --> Security
+    Security -->|CONFIDENTIAL / INTERNAL / GENERAL| Agent
+    Agent --> Router
+    Router -->|vision / coding / reasoning| Agent
+    Agent --> VectorDB
+    VectorDB -->|top_k=3 context chunks| Agent
+    Agent --> LocalLLM
+    LocalLLM -->|Ollama API| Agent
+    Agent --> Verifier
+    Verifier -->|PASSED / FAILED| Agent
+    Agent --> UI_Display
 ```
 
-### Detailed Phase Mapping:
+---
 
-- **PHASE 1 — Core Backend:**
-  - Build FastAPI backend structure (`backend/main.py`, `backend/api/`).
-  - Move configuration parsing out of hardcoded JSON files into structured Pydantic settings.
-- **PHASE 2 — Security/RBAC:**
-  - Expand [`core/security.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/security.py) into multi-factor classification (regex, entity detection, sensitivity rules).
-  - Implement full authorization rules in [`core/policy.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/policy.py).
-- **PHASE 3 — Document Intelligence:**
-  - Enhance [`document/parser.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/parser.py) and [`document/ocr.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/ocr.py) with layout preservation, table extraction, and error handling.
-- **PHASE 4 — Private RAG:**
-  - Fix document ID collisions in [`rag/vectorstore.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/rag/vectorstore.py).
-  - Implement chunking and advanced hybrid search in [`rag/retriever.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/rag/retriever.py).
-- **PHASE 5 — Model Fabric/Router:**
-  - Enhance [`core/model_router.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/model_router.py) with live Ollama connection health checks and failover options.
-- **PHASE 6 — Agent Runtime:**
-  - Refactor [`core/agent.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/agent.py) into a modular, multi-turn agent with tool integration.
-- **PHASE 7 — Verification/HITL:**
-  - Overhaul [`core/verifier.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/verifier.py) to calculate semantic entailment scores against retrieved context.
-- **PHASE 8 — Provenance/Audit/No-Egress:**
-  - Integrate [`core/provenance.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/core/provenance.py) directly into the agent execution loop and populate [`utils/hashing.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/utils/hashing.py).
-- **PHASE 9 — Deliverables:**
-  - Upgrade [`document/generator.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/generator.py) into a multi-template document generation service.
-- **PHASE 10 — Frontend:**
-  - Decouple Streamlit UI ([`app.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/app.py)) to consume backend REST API endpoints rather than direct class imports.
-- **PHASE 11 — Integration:**
-  - Create Docker/Podman packaging files and setup integration test suites.
+## 4. Detailed Module & File Analysis
+
+### 4.1 Root Directory
+- **`README.md`**: Minimal title `# On-Premise-AI-workbench`. Lacks setup instructions, architecture docs, or requirements specification.
+- **`.gitignore`**: Standard Python gitignore template ignoring `__pycache__`, virtual environments, `.env`, compiled libraries, and zip archives.
+
+### 4.2 Application Entry Point (`sovereign-ai/app.py`)
+- **Framework**: Streamlit (`st.set_page_config(layout="wide")`).
+- **Sidebar**: Displays static, green/red status badges:
+  - `LOCAL LLM` (hardcoded success)
+  - `LOCAL RAG` (hardcoded success)
+  - `POLICY ENGINE` (hardcoded success)
+  - `AUDIT ACTIVE` (hardcoded success)
+  - `EXTERNAL APIs BLOCKED` (hardcoded error/badge)
+  *Finding*: These badges do not perform real connectivity, daemon, or network egress checks.
+- **File Upload & Storage**: Saves files directly to relative path `data/uploads/` with the original filename.
+- **Image Handling**: If a non-PDF file (PNG/JPG) is uploaded, it sets `document_text = "Image document uploaded. Vision processing required."`. No actual vision processing or OCR occurs for standalone image uploads.
+- **Execution**: Instantiates `LocalVectorStore()` and `SovereignAgent(store)` on button click and calls `agent.run(task, document_text)`.
+- **Governance Buttons**: Renders `✅ APPROVE & GENERATE DELIVERABLE` and `❌ REJECT` if `human_required == True`, but neither button has an event listener or callback attached.
+
+### 4.3 Agent Core (`sovereign-ai/core/`)
+- **`agent.py`**:
+  - `LocalLLM`: Calls `ollama.chat(model=model, messages=[{"role": "user", "content": prompt}])`. Returns the raw string.
+  - `SovereignAgent`: Coordinates classification, routing, RAG retrieval, LLM generation, and verification.
+  - *Hardcoded values*:
+    - Line 47: `task_type = "scanned_document"` is hardcoded for all runs, forcing `ModelRouter` to always select the vision model (`qwen3-vl:2b`).
+    - Line 53: Filename is hardcoded as `"inspection_report.pdf"` during classification.
+    - Line 35: `self.provenance = Provenance()` is initialized in `__init__`, but never called in `run()`. Audit events are never written to disk during agent execution.
+- **`model_router.py`**:
+  - Loads `config/models.json` via relative path `Path("config/models.json")`.
+  - Maps `image`, `scanned_document`, `multimodal` $\rightarrow$ `models["vision"]` (`qwen3-vl:2b`).
+  - Maps `coding`, `code_generation`, `code_review`, `debugging` $\rightarrow$ `models["coding"]` (`qwen2.5-coder:3b`).
+  - Defaults to `models["reasoning"]` (`qwen3:4b`).
+- **`security.py`**:
+  - `SecurityEngine`: Scans text for 8 sensitive keywords: `["confidential", "internal", "inspection", "maintenance", "equipment", "vendor", "plant", "refinery"]`.
+  - Count $\ge 2 \rightarrow$ `CONFIDENTIAL` (requires human review).
+  - Count $= 1 \rightarrow$ `INTERNAL` (no human review).
+  - Count $= 0 \rightarrow$ `GENERAL` (no human review).
+  - Returns policy dictionary with boolean flags (`allow_local_processing`, `external_api`, `human_review`).
+- **`verifier.py`**:
+  - Prototype stub. Returns `supported = False` only if `len(answer.strip()) < 50`.
+  - Evidence text is joined into a string but never evaluated against claims or citations.
+- **`provenance.py`**:
+  - Implements `hash_file(filepath)` returning SHA-256.
+  - Implements `create_record(task, model, verification, approval, input_hash, output_hash)` appending JSON lines to `audit/events.jsonl`.
+  - Currently uncalled and unintegrated with `agent.py` and `app.py`.
+- **`policy.py`**:
+  - One line: `print("policy.py loaded")`. Contains no executable policy logic.
+
+### 4.4 Document Processing (`sovereign-ai/document/`)
+- **`parser.py`**:
+  - Uses PyMuPDF (`fitz.open()`) to extract text page-by-page. Returns list of `{"page": n, "text": "..."}`.
+- **`ocr.py`**:
+  - Renders PDF pages to 2x scale PNG pixmap with PyMuPDF, converts to PIL Image via `io.BytesIO`, and executes `pytesseract.image_to_string(image)`.
+  - Requires external binary `tesseract.exe` to be present on the host system PATH.
+- **`generator.py`**:
+  - Implements `create_approval_note(findings, recommendation, output_path)` using `docx.Document()`.
+  - Creates a styled Word document deliverable (`.docx`). Currently orphaned—not connected to the Streamlit UI approve action.
+
+### 4.5 Retrieval-Augmented Generation (`sovereign-ai/rag/`)
+- **`vectorstore.py`**:
+  - Uses ChromaDB `PersistentClient(path="data/vector_db")`.
+  - Collection name: `enterprise_knowledge`.
+  - Embeddings: SentenceTransformers (`all-MiniLM-L6-v2`).
+  - Ingestion flaw: Does not chunk text. Whole documents are converted into a single vector with generated IDs `doc_0`, `doc_1`. Re-ingesting will cause key collisions.
+  - Search: Performs cosine/L2 vector search with `n_results=top_k` (default 3) and returns raw document texts without metadata or similarity distances.
+- **`ingest.py`**:
+  - Iterates over `data/knowledge/*.txt`, loads whole text, and pushes to `LocalVectorStore`.
+- **`retriever.py`**:
+  - One line: `print("retriever.py loaded")`. Unused stub.
+- **`setup_knowledge.py`**:
+  - Standalone script calling `ingest_knowledge()`.
+
+### 4.6 Utilities & Audit (`sovereign-ai/utils/` & `sovereign-ai/audit/`)
+- **`utils/hashing.py`**: Empty (0 bytes).
+- **`audit/events.jsonl`**: Contains non-JSON corrupt sample string `"vjhv"`.
 
 ---
 
-## Audit Summary
+## 5. Environment, Dependencies & Runtimes
 
-* **What Already Exists:** A working end-to-end prototype containing PyMuPDF/PyTesseract document parsing, ChromaDB local vector search, Ollama LLM chat integration (`qwen` models), basic keyword security classification, Streamlit web interface, and DOCX report generation.
-* **What Is Missing:** Production REST API layer, authentication & RBAC, persistent database, advanced chunking & hybrid RAG, agent tool-calling/loops, real hallucination verification, persistent HITL workflows, containerization, and unit tests.
-* **What Should Be Built First:** **Phase 1 (Core Backend Framework)** and **Phase 4 (RAG Vector Store ID Collision Fix & Chunking)** to provide a reliable API and vector database foundation before layering security, agents, and UI.
-* **Files That Should NOT Be Modified Unnecessarily:**
-  - Existing core working logic in [`document/parser.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/parser.py) and [`document/ocr.py`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/document/ocr.py) (functions work reliably and should be wrapped/extended rather than rewritten).
-  - Data reference documents like [`data/knowledge/Maintenance_SOP.txt`](file:///c:/Users/sayak/OneDrive/Desktop/sovereign-ai/sovereign-ai/data/knowledge/Maintenance_SOP.txt).
+### 5.1 Python Environment
+- **Host Python**: Python 3.14.4 (Windows 64-bit).
+- **Virtual Environment**: No dedicated virtualenv (`.venv`) exists currently in the repository.
+
+### 5.2 Dependency Audit (`sovereign-ai/requirements.txt`)
+
+| Package in `requirements.txt` | Installed on Host | Import Status / Notes |
+|---|---|---|
+| `streamlit` | ❌ No | `ModuleNotFoundError` |
+| `ollama` | ❌ No | `ModuleNotFoundError` |
+| `chromadb` | ✅ Yes (v1.5.9) | Installed in global site-packages |
+| `sentence-transformers` | ✅ Yes (v5.5.1) | Installed with PyTorch 2.12.0 |
+| `pymupdf` (`fitz`) | ❌ No | `ModuleNotFoundError` |
+| `pytesseract` | ❌ No | `ModuleNotFoundError` |
+| `Pillow` (`PIL`) | ❌ No | `ModuleNotFoundError` |
+| `python-docx` (`docx`) | ❌ No | `ModuleNotFoundError` |
+| `pandas` | ❌ No | `ModuleNotFoundError` |
+| `numpy` | ✅ Yes (v2.4.6) | Installed |
+
+### 5.3 System Binaries & Daemons
+- **Ollama**:
+  - Binary `ollama.exe` is installed at `C:\Users\TIYASA KAMLE\AppData\Local\Programs\Ollama\ollama.exe`.
+  - **Available Models in Ollama**: Only `mistral:latest` (4.4 GB).
+  - **Configured Models in `models.json`**:
+    - `qwen3:4b` (reasoning) — **Not present**
+    - `qwen3-vl:2b` (vision) — **Not present**
+    - `qwen2.5-coder:3b` (coding) — **Not present**
+- **Tesseract-OCR**:
+  - `tesseract.exe` is **not present** on the system PATH. Calls to `ocr_pdf` will raise a runtime failure (`TesseractNotFoundError`).
+
+---
+
+## 6. Existing Features vs. Roadmap Gaps
+
+| Capability | Current State in Repository | Sovereign AI Roadmap Requirement |
+|---|---|---|
+| **API Layer** | None (only monolithic Streamlit script) | Robust FastAPI / REST endpoints with async processing, health checks, and task queue |
+| **Frontend** | Basic Streamlit UI with hardcoded indicators | Modern, responsive UI with real-time streaming, HITL approval interface, document previewer, and audit dashboard |
+| **Authentication & RBAC** | None (public access to UI) | Role-Based Access Control (Admin, Compliance Officer, Operator, Auditor) with local authentication/JWT |
+| **Model Serving** | Direct synchronous `ollama.chat()` | Resilient local model client with streaming, model fallback, concurrency management, and health probing |
+| **Model Routing** | Naive task-string matching in `model_router.py` | Dynamic intent classification, token budget awareness, capability matching, and graceful degradation |
+| **RAG Pipeline** | Unchunked single-document ChromaDB store | Recursive chunking with overlap, semantic metadata tagging, hybrid BM25 + dense retrieval, cross-encoder reranking, and citation source attribution |
+| **Document Processing** | PyMuPDF text extraction + Tesseract OCR stub | Multi-format parser (PDF, DOCX, XLSX, TXT, MD), robust OCR with layout retention, and vision model document analysis |
+| **Deliverable Generation** | Static `docx` generator script (unwired) | Template-driven deliverable generator (DOCX, PDF, Markdown) tied directly to governance approval flow |
+| **Provenance & Audit** | Unwired SHA-256 helper; corrupted log file | Immutable, tamper-evident audit ledger with cryptographically chained hashes, comprehensive event tracing, and export capabilities |
+| **Security & Guardrails** | 8-keyword heuristic matching | Multi-tier security engine: prompt injection defenses, PII redaction, strict keyword & regex policies, and real network air-gap validation |
+| **Verification / Guardrails** | Checks if answer length > 50 characters | Entailment / NLI-based grounding check, citation verification, factual hallucination scoring |
+| **Testing** | 0 test files in repo | Comprehensive unit tests, integration tests, RAG evaluation metrics, and mock LLM test suites |
+
+---
+
+## 7. What Must Be Preserved
+
+1. **Architectural Principles**:
+   - Zero external egress: strictly on-premise computation without calls to commercial cloud APIs.
+   - Controlled agentic reasoning: system prompts enforcing strict evidence attribution, separating observations from conclusions, and requiring human approval before action.
+2. **Directory Separation**:
+   - The logical partitioning of `core/`, `document/`, `rag/`, `config/`, and `audit/` is sound and should be maintained as the codebase matures.
+3. **Core Domain Workflow**:
+   - The industrial inspection and SOP compliance domain scenario (`Maintenance_SOP.txt` $\rightarrow$ inspection review $\rightarrow$ corrective maintenance approval note) represents a clear, tangible enterprise demonstration case.
+4. **Technology Choices**:
+   - Local ChromaDB with SentenceTransformers embeddings.
+   - Local Ollama model execution.
+   - Python-docx for enterprise document generation.
+
+---
+
+## 8. Risks & Architectural Concerns
+
+1. **Path-Resolution Vulnerability**:
+   All modules use relative paths (e.g., `Path("config/models.json")`, `Path("data/vector_db")`, `Path("audit/events.jsonl")`). When executed from the workspace root or via an external runner, execution fails because paths do not resolve relative to the module or project root.
+2. **Missing Host Dependencies & Models**:
+   - Attempting to run `app.py` currently crashes immediately due to missing Python packages (`streamlit`, `ollama`, `fitz`, etc.).
+   - Executing the agent will crash if Ollama attempts to load `qwen3-vl:2b` or `qwen3:4b`, which are not pulled locally.
+   - Executing OCR will crash if Tesseract is not installed on the host.
+3. **False Sense of Governance**:
+   - The Streamlit UI displays "AUDIT ACTIVE" and "EXTERNAL APIs BLOCKED", but no audit records are recorded during task runs and no network policies are enforced.
+   - The `Verifier` passes any answer over 50 characters as "PASSED", risking ungrounded hallucinations passing as verified evidence.
+4. **Vector Store Data Collision**:
+   `LocalVectorStore.add_documents` creates fixed IDs `doc_0`, `doc_1`... If documents are re-ingested or added incrementally, ChromaDB will encounter ID collisions or overwrite existing documents.
+5. **UI / Logic Coupling**:
+   Business logic, vector store instantiation, and PDF processing are invoked directly inside Streamlit render blocks. A decoupled backend service layer is necessary for stability and testability.
+
+---
+
+## 9. Recommended Phased Implementation Roadmap
+
+### Phase 1 — Environment, Working Directory Normalization & Test Harness
+- Establish virtual environment requirements and dependency resolution.
+- Normalize path resolution (convert relative paths to repository-root-relative or anchor using `Path(__file__).parent`).
+- Set up `pytest` harness with mock LLM and vector store fixtures to enable test-driven verification across all subsequent phases.
+
+### Phase 2 — Core Domain Models, Provenance & Audit System Hardening
+- Repair and standardize `audit/events.jsonl` structure.
+- Wire `Provenance` directly into `SovereignAgent.run()` so that every task, model selection, prompt hash, retrieval context hash, and output hash is permanently logged.
+- Implement tamper-evident hashing chains for audit records.
+
+### Phase 3 — Document Processing & Extraction Engine
+- Unify document extraction into a robust `DocumentProcessor` handling PDFs, DOCX, and raw text.
+- Standardize OCR fallback with clear error handling when system binaries are unavailable.
+- Connect `create_approval_note` to the execution pipeline.
+
+### Phase 4 — Production-Grade RAG Pipeline
+- Implement recursive text chunking with overlap in `rag/ingest.py` rather than indexing whole files.
+- Store chunk metadata (filename, page number, chunk index, SHA-256 hash).
+- Implement robust retrieval in `rag/retriever.py` with similarity scoring and thresholding.
+
+### Phase 5 — Model Orchestration, Routing & Verification Engine
+- Update `config/models.json` to handle dynamically available models or fallbacks (e.g., fallback to available local `mistral:latest` if Qwen models are missing).
+- Implement real verification: claim-evidence cross-checking and citation validation.
+- Remove hardcoded task type and hardcoded filename assumptions in `agent.py`.
+
+### Phase 6 — Security, Policy & Governance Engine
+- Implement `core/policy.py` to enforce deterministic egress rules and document access restrictions.
+- Expand `core/security.py` beyond basic keywords to support regex patterns, PII detection, and multi-tier sensitivity rules.
+- Add user roles and simulated air-gap network boundary tests.
+
+### Phase 7 — Application Layer & UI Enhancements
+- Wire the Streamlit HITL approval buttons to trigger deliverable generation via `document/generator.py`.
+- Provide real-time step streaming, inspection report view, audit ledger viewer, and deliverable download buttons.
+- Connect status badges to real system probes (Ollama status, ChromaDB count, audit log status).
+
+---
+
+*Audit completed with zero code modifications to existing runtime files.*

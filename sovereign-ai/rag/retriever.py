@@ -1,1 +1,0 @@
-print("retriever.py loaded")

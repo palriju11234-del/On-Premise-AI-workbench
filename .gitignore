@@ -220,8 +220,31 @@ __marimo__/
 # Project archives
 *.zip
 
+.venv/
+audit/
+
+# Sovereign AI local runtime data
+data/vector_db/
+sovereign_ai/data/vector_db/
+sovereign_ai/data/tasks/
+sovereign_ai/data/deliverables/
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# ChromaDB local storage
+sovereign_ai/data/vector_db/
+
+# Runtime logs & test files
+sovereign_ai/audit/*.jsonl
+*.pdf
+
 # Local user store & uploaded artifacts
 backend/data/users.json
+sovereign_ai/backend/data/users.json
 sovereign-ai/backend/data/users.json
+sovereign_ai/data/uploads/
 sovereign-ai/data/uploads/
+sovereign_ai/backend/data/documents.json
 sovereign-ai/backend/data/documents.json
