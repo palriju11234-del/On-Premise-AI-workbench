@@ -243,4 +243,4 @@ Distributed under the MIT License for internal distribution only.
 
 ---
 
-<p align="center">Made with 🔐 by the Sovereign AI Team</p>
+<p align="center">Made with 🔐 by Team SignalX </p>
